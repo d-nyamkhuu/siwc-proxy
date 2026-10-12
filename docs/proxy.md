@@ -47,12 +47,16 @@ Anyone who can reach a non-loopback listener and has the key can spend your plan
 The proxy completes the OAuth redirect itself at `http://127.0.0.1:<port>/auth/callback`.
 SIWC accepts any port on that loopback redirect URI.
 
-- **First sign-in** registers a client dynamically (`dynamic_agent_client`) and
-  saves the issued `client_id` and a stable `ext_agent_host_id`.
+- **First sign-in** registers this installation with OpenAI as a new client
+  (`dynamic_agent_client`), so ChatGPT shows a one-time registration screen.
+  The proxy saves the `client_id` OpenAI issues, plus an `ext_agent_host_id`
+  that identifies this machine and stays the same across sign-ins.
 - **Later sign-ins** reuse that `client_id`. They send `id_token_hint` and `login_hint`,
-  so you get no new registration screen. `--consent` adds `prompt=consent`;
-  use it when plan usage was declined.
-- A sign-in that returns a different account or registration is rejected.
+  so you get no new registration screen. `--consent` adds `prompt=consent`
+  so ChatGPT shows the permission screen again; use it if you previously
+  didn't allow use of your ChatGPT plan (state `consent_required`).
+- A sign-in is rejected and not saved if it comes back for a different ChatGPT
+  account than the saved one, or with a different `client_id`.
   To switch accounts, run `siwc-proxy logout --forget` first.
 
 Ways to start a sign-in:
@@ -64,30 +68,35 @@ Ways to start a sign-in:
 3. `siwc-proxy login` with no proxy running serves the callback on a free
    loopback port (`--port` to pick one) and exits when done.
 
-Links are launch URLs, valid for 15 minutes or until a sign-in completes, whichever
-comes first. They redirect to OpenAI with a fresh, single-use OAuth state.
+Sign-in links point at the proxy itself (`/auth/start/...`), not at OpenAI.
+Each link works for 15 minutes or until a sign-in completes, whichever comes
+first. Opening it redirects to OpenAI with a fresh, single-use OAuth state.
 Open them in a browser on the same machine, because the callback must reach `127.0.0.1`.
 
 ### Token lifecycle
 
-- Access tokens are refreshed 60 s before expiry, respecting `earliest_refresh_at`.
-  Each refresh sends `resource=https://api.openai.com/v1`.
+- Access tokens are refreshed 60 s before expiry. If OpenAI sent an
+  `earliest_refresh_at` time, the proxy doesn't refresh before then while the
+  current token still works. Each refresh sends `resource=https://api.openai.com/v1`.
 - Refresh is single-flight within the process (an async lock) and across
   processes (`credentials.lock` file lock). After taking the lock, the proxy
   re-reads the file. If another process already rotated the tokens, it adopts
   them instead of spending its own refresh token. You can run `siwc-proxy token`,
   `login`, or a second proxy against the same directory at any time.
 - The rotated token set is written atomically (0600) **before** the new ID token
-  is validated. The new refresh token is never lost.
-- Only terminal OAuth errors clear tokens: `invalid_grant`, `invalid_refresh_token`,
-  `token_expired`, `refresh_token_expired`, `refresh_token_invalidated`, and
-  `refresh_token_reused`. So does a changed `sub`. `invalid_client` means a
-  client-configuration problem, so tokens are kept and requests get a 502
-  `chatgpt_client_rejected`.
-  Even then, the registration, host id, and ID token (used as `id_token_hint`) are kept.
-  Network errors, 5xx, and malformed responses keep everything; the request gets a 502 or 504.
-- If OpenAI rejects a token with 401 at admission, the proxy refreshes once and
-  retries once. A second 401 is relayed.
+  is validated. Each refresh invalidates the old refresh token, so saving first
+  means a failed check can't leave you with no working refresh token.
+- Tokens are cleared only when OpenAI says the refresh token can never work again
+  (`invalid_grant`, `invalid_refresh_token`, `token_expired`,
+  `refresh_token_expired`, `refresh_token_invalidated`, or `refresh_token_reused`),
+  or when a refreshed ID token belongs to a different account (a changed `sub`).
+  You then need to sign in again. Clearing tokens keeps the registration, host id,
+  and ID token (used as `id_token_hint`), so that sign-in shows no registration screen.
+- `invalid_client` means OpenAI rejected the client registration, not the tokens.
+  Tokens are kept and requests get a 502 `chatgpt_client_rejected`.
+- Network errors, 5xx, and malformed responses keep everything; the request gets a 502 or 504.
+- If OpenAI rejects a token with 401 when it first receives a request (before
+  any output), the proxy refreshes once and retries once. A second 401 is relayed.
 
 `logout` revokes the refresh token, with retries, and clears the tokens.
 `--forget` deletes the registration too.
@@ -96,13 +105,13 @@ Open them in a browser on the same machine, because the callback must reach `127
 
 | Route | Auth | Notes |
 | --- | --- | --- |
-| `GET /v1/models`, `GET /v1/models/{id}` | key | Account-visible models in OpenAI list shape, plus `display_name`, `context_window`, `input_modalities`, `supported_reasoning_levels` (effort names) and similar fields. Codex-only fields are dropped. Cached 5 minutes. |
+| `GET /v1/models`, `GET /v1/models/{id}` | key | Account-visible models in OpenAI list shape, plus `display_name`, `context_window`, `input_modalities`, `supported_reasoning_levels` (effort names) and similar fields. Codex-only fields are dropped. |
 | `POST /v1/responses` | key | Responses API; see below |
 | `POST /v1/chat/completions` | key | Chat Completions, translated through Responses |
 | `GET /auth/status` | key | `state` (`ready`, `signed_out`, `reauth_required`, `consent_required`), email, scopes, expiry, `login_url` |
-| `POST /auth/login?consent=` | key | `{"url": ...}`, a launch link |
-| `POST /auth/logout?forget=` | key | `{"state", "revoked"}` |
-| `GET /auth/start/{launch}`, `GET /auth/callback` | link / OAuth state | Browser only |
+| `POST /auth/login?consent=true` | key | `{"url": ...}`, a sign-in link. `consent=true` works like `login --consent`. |
+| `POST /auth/logout?forget=true` | key | `{"state", "revoked"}`. `forget=true` works like `logout --forget`. |
+| `GET /auth/start/{launch}`, `GET /auth/callback` | none (the link itself, then the OAuth state) | Browser only |
 | `GET /healthz` | none | Liveness |
 | anything else | key | OpenAI-shaped `404 unknown_url` |
 
@@ -114,7 +123,8 @@ Organization and project headers are not forwarded.
 
 Back to the client, the proxy relays only these upstream headers: the request
 id, `retry-after`, `retry-after-ms`, `x-should-retry`, and anything starting
-with `openai-`, `x-ratelimit-`, or `x-codex-` (plan usage). Relayed streams also
+with `openai-`, `x-ratelimit-`, or `x-codex-` (the ChatGPT backend reports
+plan usage in these). Relayed streams also
 keep `content-type`. The ChatGPT backend calls the request id
 `x-oai-request-id`, so the proxy also sends it as `x-request-id`, which SDKs
 expose as `_request_id`. Cookies and CDN headers such as `date` and `server`
@@ -122,7 +132,8 @@ are dropped. Responses carry `Cache-Control: no-store`.
 
 `GET /healthz?challenge=<text>` adds `proof`, an HMAC-SHA256 of
 `siwc-proxy healthz <text>` keyed with the local key. `siwc-proxy login` checks
-the proof before sending the key, so another program on the port never sees it.
+the proof before sending the key. If some other program is listening on the
+proxy's port, the proof fails and that program never receives the key.
 
 ### `/v1/responses`
 
@@ -231,8 +242,8 @@ so SDK exception classes work:
 | Client registration rejected at refresh | 502 | `chatgpt_client_rejected` (run `logout --forget`, then sign in, if it persists) |
 
 These codes get the same status whether they arrive as an HTTP error or as a
-`response.failed` event. Admission bodies like `{"detail": ...}` are rewrapped
-in the OpenAI shape.
+`response.failed` event. Errors the ChatGPT backend returns in its own
+`{"detail": ...}` shape are rewrapped in the OpenAI shape.
 
 **Retries.** The proxy retries only before any inference starts:
 
@@ -243,40 +254,3 @@ in the OpenAI shape.
 Once streaming has started, nothing is retried. A stream that fails midway ends
 with an error event and no `[DONE]`. Disconnecting closes the upstream request,
 but work already done may still count against your plan.
-
-## Security model
-
-- The proxy is designed for one trusted local user. It binds to loopback by
-  default and requires the bearer key on every API and status route, using a
-  constant-time comparison.
-- `credentials.json` and `proxy_key` are written atomically with mode 0600 in a
-  0700 directory. An existing data directory that others can read is tightened
-  to 0700. On Windows, the files rely instead on the access rules of your
-  user profile folder (`%LOCALAPPDATA%`). Either way this is plaintext protected
-  by file permissions, not an encrypted vault. Don't commit or copy the data
-  directory. Copying it also duplicates the host identity.
-- Tokens and request bodies are never logged, and the access log is disabled.
-  Log lines carry method, path, status, model, latency, and upstream request id;
-  control characters in them are replaced. Authlib and httpcore stay at
-  `warning` even with `--log-level debug`, because their debug output includes
-  tokens. `status` never prints tokens; `token` prints only to stdout.
-- The proxy uses plain HTTP. Keep it on loopback unless the network is trusted
-  (see [Docker, `localhost`, and LAN access](#docker-localhost-and-lan-access)).
-- The callback only accepts `127.0.0.1:<port>`. The OAuth state is bound to the
-  browser through a signed session cookie and can be used once.
-
-## Live smoke test
-
-Automated tests mock OpenAI. To verify with a real account:
-
-1. Start `uv run siwc-proxy serve` while signed out. Open the printed link, then
-   confirm that `uv run siwc-proxy status` reports `ready`.
-2. With the `openai` SDK at the base URL, run `models.list()`, chat (plain and
-   `stream=True`), and `responses.create(input="hi")`. Then do a tool-call
-   round trip.
-3. Edit `expires_at` in `credentials.json` to a past time. Then send two
-   requests at once and run `uv run siwc-proxy token` in another terminal.
-   Expect exactly one refresh in the log and intact credentials.
-4. Run `uv run siwc-proxy logout`. The next request should return 401 with a
-   link. Signing in again should reuse the same `client_id`, with no
-   registration screen.

@@ -10,7 +10,8 @@ framework, or tool that lets you set a base URL.
   registers its client on first use, and reuses that registration afterwards.
   [Authlib](https://docs.authlib.org/) does PKCE, state, nonce, and ID-token checks.
 - **Safe token refresh.** Rotating refresh tokens are refreshed once, even across
-  processes (file lock). Refreshed tokens are saved before anything else can fail.
+  processes (file lock). Refreshed tokens are saved before they are checked, so
+  a failed check never loses the new refresh token.
   A temporary outage never deletes credentials. An upstream 401 triggers one refresh and retry.
 - **Works with ordinary client code.** `responses.create(input="hi")` without
   `stream`/`store` works: the proxy streams upstream and aggregates the result.
@@ -78,7 +79,7 @@ uv tool install .
 | Command | What it does |
 | --- | --- |
 | `siwc-proxy serve` | Run the proxy (default `127.0.0.1:8787`). Starts even when signed out. |
-| `siwc-proxy login [--consent]` | Sign in or re-authorize. Uses the running proxy if there is one; otherwise hosts the callback on a temporary port. |
+| `siwc-proxy login [--consent]` | Sign in or re-authorize. Uses the running proxy if there is one; otherwise hosts the callback on a temporary port. `--consent` shows ChatGPT's permission screen again, in case you didn't allow plan usage before. |
 | `siwc-proxy logout [--forget]` | Revoke and clear tokens. `--forget` also drops the registration (needed to switch accounts). |
 | `siwc-proxy status [--json] [--show-key]` | Account, state, scopes, expiry. Never prints tokens. |
 | `siwc-proxy token` | Print a fresh access token to stdout, for scripts. |
@@ -91,7 +92,7 @@ proxy speaks plain HTTP: the key and your prompts then cross the network
 unencrypted. See the warning in [docs/proxy.md](docs/proxy.md#docker-localhost-and-lan-access).
 
 See **[docs/proxy.md](docs/proxy.md)** for configuration, routes, the Chat
-translation rules, error mapping, Docker/LAN access, and the security model.
+translation rules, error mapping, and Docker/LAN access.
 
 ## Development
 
