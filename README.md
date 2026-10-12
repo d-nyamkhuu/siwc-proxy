@@ -149,6 +149,8 @@ git push origin main --tags
 The [release workflow](https://github.com/d-nyamkhuu/siwc-proxy/blob/main/.github/workflows/release.yml) runs the tests, builds the
 wheel and sdist, smoke-tests both, and publishes to PyPI with
 [Trusted Publishing](https://docs.pypi.org/trusted-publishers/), so no API token is stored.
+Publishing waits for approval of the `pypi` deployment on the workflow run. After it publishes,
+the workflow creates the GitHub release with generated notes and the built files attached.
 Before the first release, add a pending publisher on PyPI for project `siwc-proxy`,
 repository `d-nyamkhuu/siwc-proxy`, workflow `release.yml`, environment `pypi`.
 

@@ -1,6 +1,6 @@
 name: Publish to PyPI
 
-# Push a tag such as v0.3.0 (matching the version in pyproject.toml) to publish.
+# Push a tag such as v0.3.0 (matching the version in pyproject.toml) to publish to PyPI and create the GitHub release.
 # PyPI side, once: add a Trusted Publisher for this repository, workflow `release.yml`, environment `pypi`.
 on:
   push:
@@ -60,3 +60,23 @@ jobs:
           name: dist
           path: dist/
       - run: uv publish
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write  # create the release; the tag already exists
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *rc*|*a[0-9]*|*b[0-9]*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes $prerelease
