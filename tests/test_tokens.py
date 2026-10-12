@@ -1,6 +1,5 @@
 """Refresh rules: single-flight across tasks and processes, what is kept on failure, upstream 401 retry."""
 
-import json
 import subprocess
 import sys
 import textwrap
@@ -17,7 +16,7 @@ from siwc_proxy.constants import RESOURCE
 from siwc_proxy.errors import OpenAIError
 from siwc_proxy.server import create_app
 from siwc_proxy.store import Store
-from support import BASE, BODY, HEADERS, KEY, id_token, running, saved, write_credentials
+from support import BASE, BODY, HEADERS, KEY, assert_private, id_token, running, saved, write_credentials
 
 
 def auth_for(directory, fake):
@@ -41,7 +40,7 @@ def test_refresh_request_and_rotation_are_saved(expired, fake):
     assert account["refresh_token"] == "rotated-1" and account["access_token"] == "refreshed-1"
     assert account["expires_at"] > time.time() + 3000
     assert "chatgpt.tokens.use.direct" in account["scope"]  # omitted scope keeps the previous grant
-    assert (expired / "credentials.json").stat().st_mode & 0o777 == 0o600
+    assert_private(expired / "credentials.json")
 
 
 def test_valid_token_is_not_refreshed(directory, fake):
@@ -226,16 +225,3 @@ def test_refresh_skipped_when_another_caller_already_replaced_the_token(director
 
     assert anyio.run(exercise) == "someone-else-refreshed"
     assert not fake.token_calls
-
-
-def test_legacy_credentials_are_readable(tmp_path, fake):
-    folder = tmp_path / "legacy"
-    folder.mkdir()
-    (folder / "credentials.json").write_text(json.dumps({
-        "ext_agent_host_id": "urn:uuid:legacy", "account": {
-            "client_id": "oaiapp_old", "subject": "s", "scopes": ["openid", "chatgpt.tokens.use.direct"],
-            "access_token": "legacy-token", "refresh_token": "r", "expires_at": time.time() + 3600,
-            "expires_in": 3600}}))
-    auth = auth_for(folder, fake)
-    assert auth.status()["state"] == "ready"
-    assert anyio.run(auth.access_token) == "legacy-token"

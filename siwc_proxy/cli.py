@@ -2,11 +2,12 @@
 
 import json
 import logging
-import shutil
+import secrets
 import socket
 import sys
 import time
 import webbrowser
+from contextlib import closing
 from pathlib import Path
 
 import anyio
@@ -15,25 +16,10 @@ import httpx
 import uvicorn
 
 from .auth import ChatGPTAuth
-from .config import Settings, default_data_dir
+from .config import Settings
 from .constants import USAGE_URL
 from .errors import OpenAIError
 from .store import CredentialFileError, Store
-
-LEGACY_DIR = Path(click.get_app_dir("openai-signin-cli", roaming=True))
-
-
-def migrate_legacy(settings):
-    """Carry the old signin_cli registration (client_id, host id, tokens) into the default directory once."""
-    target = settings.data_dir / "credentials.json"
-    legacy = LEGACY_DIR / "credentials.json"
-    if settings.data_dir != default_data_dir().resolve() or target.exists() or not legacy.is_file():
-        return
-    settings.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    shutil.copy2(legacy, target)
-    target.chmod(0o600)
-    click.echo(f"Imported credentials from {legacy}.", err=True)
-
 
 def make_settings(ctx, **overrides):
     values = {k: v for k, v in overrides.items() if v not in (None, ())}
@@ -43,7 +29,6 @@ def make_settings(ctx, **overrides):
         settings = Settings(**values)
     except ValueError as error:
         raise click.UsageError(str(error)) from None
-    migrate_legacy(settings)
     return settings
 
 
@@ -51,19 +36,29 @@ def configure_logging(level):
     logging.basicConfig(level=level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     # httpx logs every outbound request at INFO; keep that for --log-level debug.
     logging.getLogger("httpx").setLevel(logging.DEBUG if level == "debug" else logging.WARNING)
+    # Their debug output includes request headers and token responses.
+    for name in ("authlib", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def running_proxy(settings, api_key):
-    """An httpx client for a proxy already serving this data directory, or None."""
-    client = httpx.Client(base_url=settings.origin, headers={"Authorization": "Bearer " + api_key},
-                          trust_env=False, timeout=10)
+    """An httpx client for a proxy already serving this data directory, or None.
+
+    The key is sent only after the server proves it knows it, so another program on the port never sees it.
+    """
+    from .server import healthz_proof
+
+    challenge = secrets.token_hex(16)
+    client = httpx.Client(base_url=settings.origin, trust_env=False, timeout=10)
     try:
-        response = client.get("/healthz")
-        if response.status_code == 200 and response.json().get("service") == "siwc-proxy":
+        response = client.get("/healthz", params={"challenge": challenge})
+        proof = response.json().get("proof") if response.status_code == 200 else None
+        if isinstance(proof, str) and secrets.compare_digest(proof.encode(), healthz_proof(api_key, challenge).encode()):
+            client.headers["Authorization"] = "Bearer " + api_key
             response = client.get("/auth/status")
             if response.status_code == 200:
                 return client
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, ValueError, AttributeError):
         pass
     client.close()
     return None
@@ -92,7 +87,8 @@ def main(ctx, data_dir):
 
 
 @main.command()
-@click.option("--host", help="Interface to bind (default 127.0.0.1).")
+@click.option("--host", help="Interface to bind (default 127.0.0.1). The proxy speaks plain HTTP; "
+              "only bind other interfaces on a trusted network.")
 @click.option("--port", type=click.IntRange(1, 65535), help="Port (default 8787).")
 @click.option("--allowed-host", "allowed_hosts", multiple=True,
               help="Extra Host header to accept, e.g. host.docker.internal. Repeatable; '*' disables the check.")
@@ -107,8 +103,9 @@ def serve(ctx, **options):
     settings = make_settings(ctx, **options)
     configure_logging(settings.log_level)
     if not settings.loopback:
-        click.secho(f"Warning: listening on {settings.host}; anyone who can reach it and has the key can use "
-                    "your ChatGPT plan.", fg="yellow", err=True)
+        click.secho(f"Warning: listening on {settings.host} over plain HTTP; the key and prompts are unencrypted "
+                    "on the network, and anyone who can reach it and has the key can use your ChatGPT plan.",
+                    fg="yellow", err=True)
     try:
         app = create_app(settings)
     except (OSError, ValueError, CredentialFileError) as error:
@@ -133,11 +130,14 @@ def login(ctx, consent, port, timeout, browser):
     api_key = settings.resolve_api_key()
     client = running_proxy(settings, api_key)
     if client is not None:
-        with client:
+        with closing(client):  # already used, so `with client` would raise
             def snapshot():
                 return {k: v for k, v in client.get("/auth/status").json().items() if k != "login_url"}
             before = snapshot()
-            open_link(client.post("/auth/login", params={"consent": str(consent).lower()}).json()["url"], browser)
+            url = client.post("/auth/login", params={"consent": str(consent).lower()}).json().get("url")
+            if not isinstance(url, str) or not url.startswith(settings.origin + "/auth/start/"):
+                raise click.ClickException("The running proxy returned an unexpected sign-in link.")
+            open_link(url, browser)
             end = time.monotonic() + timeout
             # Any completed sign-in changes the saved token expiry, even for the same account.
             while (status := snapshot()) == before:

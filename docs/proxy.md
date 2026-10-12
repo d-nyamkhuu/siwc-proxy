@@ -11,17 +11,14 @@ Every setting can come from a `serve` flag or a `SIWC_PROXY_*` environment varia
 
 | Flag | Environment | Default | Meaning |
 | --- | --- | --- | --- |
-| `--data-dir` | `SIWC_PROXY_DATA_DIR` | per-user data dir (`platformdirs`, app `siwc-proxy`) | Credentials, host identity, generated key |
+| `--data-dir` | `SIWC_PROXY_DATA_DIR` | per-user data dir (`platformdirs`, app `siwc-proxy`; for example `~/.local/share/siwc-proxy`, or `%LOCALAPPDATA%\siwc-proxy` on Windows) | Credentials, host identity, generated key |
 | — | `SIWC_PROXY_API_KEY` | generated into `<data-dir>/proxy_key` | Local bearer key clients must send |
-| `--host` | `SIWC_PROXY_HOST` | `127.0.0.1` | Interface to bind. Non-loopback prints a warning. |
+| `--host` | `SIWC_PROXY_HOST` | `127.0.0.1` | Interface to bind. Non-loopback prints a warning; see below. |
 | `--port` | `SIWC_PROXY_PORT` | `8787` | Port for the API **and** the OAuth callback |
 | `--allowed-host` (repeatable) | `SIWC_PROXY_ALLOWED_HOSTS` (comma-separated) | none | Extra `Host` headers to accept (see below) |
 | `--strict` / `--lenient` | `SIWC_PROXY_STRICT` | lenient | Reject Chat options that can't be honored instead of dropping them |
 | `--log-level` | `SIWC_PROXY_LOG_LEVEL` | `info` | `debug`, `info`, `warning`, `error` |
 | `--read-timeout` | `SIWC_PROXY_READ_TIMEOUT` | `300` | Seconds to wait between upstream bytes |
-
-On first run with the default data directory, credentials from the older
-`openai-signin-cli` directory are imported once. This keeps the existing client registration.
 
 ### Docker, `localhost`, and LAN access
 
@@ -38,6 +35,12 @@ uv run siwc-proxy serve --host 0.0.0.0 --allowed-host my-laptop.lan
 
 A bare name matches any port; `name:port` matches exactly; `*` disables the check.
 Anyone who can reach a non-loopback listener and has the key can spend your plan usage.
+
+> [!WARNING]
+> The proxy speaks plain HTTP. On a non-loopback `--host`, the local key, your
+> prompts, and the model's answers cross the network unencrypted. Use it only on
+> a network you trust, or put a TLS reverse proxy or an SSH tunnel in front.
+> Keep the proxy for your own use; don't share access to your plan with others.
 
 ## Signing in
 
@@ -104,12 +107,21 @@ Open them in a browser on the same machine, because the callback must reach `127
 | anything else | key | OpenAI-shaped `404 unknown_url` |
 
 The proxy forwards the request headers `OpenAI-Beta`, `Idempotency-Key`, and
-`X-Client-Request-Id`, plus the query string. It relays `retry-after`, rate-limit
-headers, and the request id back. The ChatGPT backend calls the request id
+`X-Client-Request-Id`. Only `GET /v1/models` forwards its query string; the
+catalog is cached for five minutes only when there is no query.
+Organization and project headers are not forwarded.
+
+Back to the client, the proxy relays only these upstream headers: the request
+id, `retry-after`, `retry-after-ms`, `x-should-retry`, and anything starting
+with `openai-`, `x-ratelimit-`, or `x-codex-` (plan usage). Relayed streams also
+keep `content-type`. The ChatGPT backend calls the request id
 `x-oai-request-id`, so the proxy also sends it as `x-request-id`, which SDKs
-expose as `_request_id`. Organization and project headers are not forwarded.
-`date`, `server`, and other edge headers from OpenAI's CDN are not relayed.
-Responses carry `Cache-Control: no-store`.
+expose as `_request_id`. Cookies and CDN headers such as `date` and `server`
+are dropped. Responses carry `Cache-Control: no-store`.
+
+`GET /healthz?challenge=<text>` adds `proof`, an HMAC-SHA256 of
+`siwc-proxy healthz <text>` keyed with the local key. `siwc-proxy login` checks
+the proof before sending the key, so another program on the port never sees it.
 
 ### `/v1/responses`
 
@@ -237,12 +249,18 @@ but work already done may still count against your plan.
   default and requires the bearer key on every API and status route, using a
   constant-time comparison.
 - `credentials.json` and `proxy_key` are written atomically with mode 0600 in a
-  0700 directory. This is plaintext protected by file permissions, not an
-  encrypted vault. Don't commit or copy the data directory. Copying it also
-  duplicates the host identity.
+  0700 directory. An existing data directory that others can read is tightened
+  to 0700. On Windows, the files rely instead on the access rules of your
+  user profile folder (`%LOCALAPPDATA%`). Either way this is plaintext protected
+  by file permissions, not an encrypted vault. Don't commit or copy the data
+  directory. Copying it also duplicates the host identity.
 - Tokens and request bodies are never logged, and the access log is disabled.
-  Log lines carry method, path, status, model, latency, and upstream request id.
-  `status` never prints tokens; `token` prints only to stdout.
+  Log lines carry method, path, status, model, latency, and upstream request id;
+  control characters in them are replaced. Authlib and httpcore stay at
+  `warning` even with `--log-level debug`, because their debug output includes
+  tokens. `status` never prints tokens; `token` prints only to stdout.
+- The proxy uses plain HTTP. Keep it on loopback unless the network is trusted
+  (see [Docker, `localhost`, and LAN access](#docker-localhost-and-lan-access)).
 - The callback only accepts `127.0.0.1:<port>`. The OAuth state is bound to the
   browser through a signed session cookie and can be used once.
 

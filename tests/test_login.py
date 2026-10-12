@@ -11,7 +11,7 @@ from siwc_proxy.auth import ChatGPTAuth
 from siwc_proxy.config import Settings
 from siwc_proxy.constants import DIRECT_SCOPE, RESOURCE, SCOPES
 from siwc_proxy.store import Store
-from support import BASE, BODY, KEY, id_token, running, saved, write_credentials
+from support import BASE, BODY, KEY, assert_private, id_token, running, saved, write_credentials
 
 
 def start(client, consent=False):
@@ -59,7 +59,7 @@ def test_first_sign_in_registers_and_saves(tmp_path, fake):
         account = record["account"]
         assert account["client_id"] == "oaiapp_issued" and account["subject"] == "test-subject"
         assert account["access_token"] == "new-access" and DIRECT_SCOPE in account["scope"]
-        assert (folder / "credentials.json").stat().st_mode & 0o777 == 0o600
+        assert_private(folder / "credentials.json")
         assert app.state.auth.signed_in.is_set()
         assert client.get("/auth/status").json()["state"] == "ready"
         assert client.post("/v1/chat/completions", json=BODY).status_code == 200

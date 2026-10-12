@@ -2,6 +2,7 @@
 
 import gzip
 import json
+import os
 import socket
 import threading
 
@@ -12,8 +13,10 @@ from fastapi.testclient import TestClient
 
 from siwc_proxy.config import Settings
 from siwc_proxy.server import create_app
-from support import (BASE, BODY, HEADERS, KEY, TEXT_ITEM, Chunks, live_server, parse_chunks, running, sse,
-                     terminal, text_events, tool_events, write_credentials)
+from siwc_proxy.server import healthz_proof
+from siwc_proxy.store import create_private, private_dir
+from support import (BASE, BODY, HEADERS, KEY, TEXT_ITEM, Chunks, assert_private, live_server, parse_chunks, running,
+                     sse, terminal, text_events, tool_events, write_credentials)
 
 
 def streamed(events, **headers):
@@ -236,7 +239,7 @@ def test_responses_normalized_and_aggregated(directory, fake):
         sent = json.loads(fake.calls[-1].content)
         assert sent == {"model": "test-model", "input": [{"role": "user", "content": "Hi"}],
                         "store": False, "stream": True}
-        assert fake.calls[-1].url.query == b"x=a%20b&x=c"
+        assert fake.calls[-1].url.query == b""  # only the models catalog takes query parameters
         assert fake.calls[-1].headers["openai-beta"] == "test=v1"
 
 
@@ -302,6 +305,19 @@ def test_upstream_request_id_and_edge_headers(directory, fake):
             assert response.headers["x-request-id"] == "req-oai"
             assert "1970" not in response.headers.get("date", "")
             assert "alt-svc" not in response.headers and response.headers.get("server") != "cloudflare"
+
+
+def test_only_client_relevant_upstream_headers_are_relayed(directory, fake):
+    fake.api = streamed(text_events(), **{"openai-processing-ms": "12", "x-codex-primary-used-percent": "5",
+                                          "x-ratelimit-limit-requests": "9", "retry-after-ms": "100",
+                                          "cf-ray": "abc", "x-envoy-upstream-service-time": "3", "via": "edge"})
+    with running(directory, fake) as (client, *_):
+        for body in ({"model": "m", "input": "Hi", "stream": True}, {"model": "m", "input": "Hi"}):
+            response = client.post("/v1/responses", json=body)
+            assert response.headers["openai-processing-ms"] == "12"
+            assert response.headers["x-codex-primary-used-percent"] == "5"
+            assert response.headers["x-ratelimit-limit-requests"] == "9" and response.headers["retry-after-ms"] == "100"
+            assert not any(h in response.headers for h in ("cf-ray", "x-envoy-upstream-service-time", "via"))
 
 def test_responses_stream_is_relayed_unchanged(directory, fake):
     raw = sse(text_events()) + b'event: new.event\ndata: {"unknown":true}\n\n'
@@ -468,6 +484,18 @@ def test_models_catalog_cache_and_retrieve(directory, fake):
         assert len(fake.calls) == 1
 
 
+def test_models_query_is_forwarded_but_not_cached(directory, fake):
+    fake.api = lambda r: httpx.Response(200, json={"models": [{"slug": "m", "visibility": "list"}]})
+    with running(directory, fake) as (client, fake, app):
+        for n in range(3):
+            assert client.get(f"/v1/models?client_version={n}").status_code == 200
+        assert [c.url.query for c in fake.calls] == [b"client_version=0", b"client_version=1", b"client_version=2"]
+        assert not app.state.models
+        client.get("/v1/models")
+        client.get("/v1/models")
+        assert len(fake.calls) == 4 and list(app.state.models) == ["catalog"]
+
+
 
 def test_models_are_slimmed(directory, fake):
     fake.api = lambda r: httpx.Response(200, json={"models": [{
@@ -501,7 +529,49 @@ def test_generated_api_key_is_saved_privately(tmp_path):
     settings = Settings(data_dir=tmp_path / "keyed")
     key = settings.resolve_api_key()
     assert key.startswith("sk-siwc-") and settings.resolve_api_key() == key
-    assert (tmp_path / "keyed" / "proxy_key").stat().st_mode & 0o777 == 0o600
+    assert_private(tmp_path / "keyed" / "proxy_key")
+
+
+def test_first_generated_key_wins(tmp_path):
+    path = tmp_path / "keyed" / "proxy_key"
+    assert create_private(path, "first\n")
+    assert not create_private(path, "second\n")
+    assert Settings(data_dir=tmp_path / "keyed").resolve_api_key() == "first"
+    assert [p.name for p in path.parent.iterdir()] == ["proxy_key"]  # no temp files left behind
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permissions")
+def test_existing_data_dir_is_made_private(tmp_path):
+    folder = tmp_path / "open"
+    folder.mkdir()
+    folder.chmod(0o755)
+    private_dir(folder)
+    assert folder.stat().st_mode & 0o777 == 0o700
+
+
+def test_healthz_proves_the_key_only_on_request(directory, fake):
+    with running(directory, fake) as (client, *_):
+        assert "proof" not in client.get("/healthz", headers={"Authorization": ""}).json()
+        result = client.get("/healthz", params={"challenge": "abc"}, headers={"Authorization": ""}).json()
+        assert result["proof"] == healthz_proof(KEY, "abc") != healthz_proof("other", "abc")
+
+
+def test_logged_paths_and_models_cannot_forge_lines(directory, fake, caplog):
+    caplog.set_level("INFO", logger="siwc_proxy")
+    with running(directory, fake) as (client, *_):
+        client.post("/v1/chat/completions", json={**BODY, "model": "m\nFAKE 200 OK"})
+        client.get("/v1/nope%0aFAKE")
+    lines = [r.getMessage() for r in caplog.records if r.name == "siwc_proxy"]
+    assert lines and not any("\n" in line for line in lines)
+    assert any("model=m?FAKE" in line for line in lines) and any("/v1/nope?FAKE" in line for line in lines)
+
+
+@pytest.mark.parametrize("options", ["yes", ["include_usage"], {"include_usage": True}])
+def test_stream_options_without_streaming_is_ignored(directory, fake, options):
+    with running(directory, fake) as (client, *_):
+        response = client.post("/v1/chat/completions", json={**BODY, "stream_options": options})
+        assert response.status_code == 200 and response.headers["x-siwc-ignored-params"] == "stream_options"
+        assert "usage" in response.json()
 
 
 def test_changed_credentials_and_scope_are_read_each_request(directory, fake):

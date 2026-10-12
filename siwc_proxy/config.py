@@ -10,11 +10,11 @@ from platformdirs import user_data_dir
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from .store import write_private
+from .store import create_private
 
 
 def default_data_dir():
-    return Path(user_data_dir("siwc-proxy", appauthor=False, roaming=True))
+    return Path(user_data_dir("siwc-proxy", appauthor=False))
 
 
 class Settings(BaseSettings):
@@ -77,11 +77,10 @@ class Settings(BaseSettings):
             key = self.api_key.get_secret_value()
         else:
             path = self.data_dir / "proxy_key"
-            try:
-                key = path.read_text(encoding="utf-8").strip()
-            except FileNotFoundError:
-                key = "sk-siwc-" + secrets.token_urlsafe(32)
-                write_private(path, key + "\n")
+            if not path.exists():
+                # Concurrent first runs (serve and login) must agree on one key: the first creator wins.
+                create_private(path, "sk-siwc-" + secrets.token_urlsafe(32) + "\n")
+            key = path.read_text(encoding="utf-8").strip()
         if not key or any(c.isspace() for c in key):
             raise ValueError("The local API key must be nonempty and contain no whitespace.")
         return key

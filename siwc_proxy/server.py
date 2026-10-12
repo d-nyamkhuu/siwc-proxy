@@ -1,5 +1,7 @@
 """FastAPI app: OpenAI-compatible /v1 routes, sign-in routes, and the local access boundary."""
 
+import hashlib
+import hmac
 import json
 import logging
 import secrets
@@ -26,11 +28,11 @@ from .store import CredentialFileError, Store
 
 log = logging.getLogger("siwc_proxy")
 
-HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-               "te", "trailer", "transfer-encoding", "upgrade"}
 REQUEST_HEADERS = {"openai-beta", "idempotency-key", "x-client-request-id"}
-# Describe OpenAI's edge rather than this server; `date` and `server` would otherwise be duplicated.
-EDGE_HEADERS = {"date", "server", "alt-svc", "strict-transport-security", "access-control-expose-headers"}
+# Upstream response headers clients use: request ids, retry hints, rate limits. Everything else describes
+# OpenAI's edge or the ChatGPT backend rather than this server, and is dropped.
+RESPONSE_HEADERS = {"x-request-id", "retry-after", "retry-after-ms", "x-should-retry"}
+RESPONSE_PREFIXES = ("openai-", "x-ratelimit-", "x-codex-")
 # Catalog fields worth exposing; the rest (Codex prompt templates and client hints) is ~80 KB per model.
 MODEL_FIELDS = ("display_name", "description", "context_window", "max_context_window", "input_modalities",
                 "default_reasoning_level", "supported_reasoning_levels", "supports_parallel_tool_calls",
@@ -41,6 +43,16 @@ MODELS_TTL = 300
 
 def is_public(path):
     return path in ("/healthz", "/auth/callback") or path.startswith("/auth/start/")
+
+
+def healthz_proof(api_key, challenge):
+    """Lets the CLI check that a server knows the key before sending it."""
+    return hmac.new(api_key.encode(), ("siwc-proxy healthz " + challenge).encode(), hashlib.sha256).hexdigest()
+
+
+def printable(text, limit=200):
+    """Log-safe text: control characters cannot forge or split log lines."""
+    return "".join(c if c.isprintable() else "?" for c in text[:limit])
 
 
 class Boundary:
@@ -80,10 +92,10 @@ class Boundary:
             await self.app(scope, receive, no_store)
         finally:
             model = scope.get("state", {}).get("model")
-            path = "/auth/start/…" if scope["path"].startswith("/auth/start/") else scope["path"]
+            path = "/auth/start/…" if scope["path"].startswith("/auth/start/") else printable(scope["path"])
             log.info("%s %s %s%s%s %.0fms", scope["method"], path, seen.get("status", "-"),
-                     f" model={model}" if isinstance(model, str) else "",
-                     f" request_id={seen['request_id']}" if seen.get("request_id") else "",
+                     f" model={printable(model)}" if isinstance(model, str) else "",
+                     f" request_id={printable(seen['request_id'])}" if seen.get("request_id") else "",
                      (time.perf_counter() - started) * 1000)
 
 
@@ -115,12 +127,10 @@ class UpstreamStreamingResponse(StreamingResponse):
 
 
 def response_headers(response, *, translated=False):
-    excluded = HOP_HEADERS | EDGE_HEADERS | {part.strip().lower() for part in response.headers.get("connection", "").split(",")}
-    # Bodies are always decoded (relayed streams may be patched), so encoding and framing headers no longer apply.
-    excluded |= {"content-length", "content-encoding", "etag", "content-md5", "digest"}
-    if translated:
-        excluded.add("content-type")
-    headers = {k: v for k, v in response.headers.items() if k.lower() not in excluded and k.lower() != "set-cookie"}
+    # Bodies are always decoded (relayed streams may be patched), so encoding and framing headers never apply.
+    headers = {k: v for k, v in response.headers.items()
+               if k.lower() in RESPONSE_HEADERS or k.lower().startswith(RESPONSE_PREFIXES)
+               or (k.lower() == "content-type" and not translated)}
     # The ChatGPT backend names its request id x-oai-request-id; SDKs read x-request-id.
     if "x-request-id" not in response.headers and "x-oai-request-id" in response.headers:
         headers["x-request-id"] = response.headers["x-oai-request-id"]
@@ -236,7 +246,7 @@ def create_app(settings=None, *, transport=None, api_key=None):
             await response.aclose()
             app.state.active.discard(response)
 
-    async def send(request, method, path, body=None):
+    async def send(request, method, path, body=None, *, query=None):
         """Open an upstream stream; refresh once on 401 and retry admission-time 503s and connect errors.
 
         Nothing is retried once the response body is being relayed.
@@ -255,7 +265,7 @@ def create_app(settings=None, *, transport=None, api_key=None):
             upstream = client.build_request(method, RESOURCE + path, headers={**headers, "Authorization": "Bearer " + token},
                                             content=content)
             # Preserve repeated query parameters and their original percent-encoding.
-            upstream.url = upstream.url.copy_with(query=request.scope["query_string"] or None)
+            upstream.url = upstream.url.copy_with(query=query or None)
             try:
                 response = await client.send(upstream, stream=True)
             except (httpx.ConnectError, httpx.ConnectTimeout) as error:
@@ -306,8 +316,11 @@ def create_app(settings=None, *, transport=None, api_key=None):
     # Health and sign-in
 
     @app.get("/healthz")
-    async def healthz():
-        return {"status": "ok", "service": "siwc-proxy"}
+    async def healthz(challenge: str | None = None):
+        result = {"status": "ok", "service": "siwc-proxy"}
+        if challenge:
+            result["proof"] = healthz_proof(api_key, challenge[:128])
+        return result
 
     @app.get("/auth/status")
     async def auth_status():
@@ -352,11 +365,11 @@ def create_app(settings=None, *, transport=None, api_key=None):
     # OpenAI API
 
     async def catalog(request):
-        key = request.scope["query_string"]
-        cached = app.state.models.get(key)
-        if cached and cached[0] > time.monotonic():
+        query = request.scope["query_string"]
+        cached = app.state.models.get("catalog")
+        if not query and cached and cached[0] > time.monotonic():
             return cached[1], cached[2]
-        response = await send(request, "GET", "/models")
+        response = await send(request, "GET", "/models", query=query)
         if not response.is_success:
             raise Relayed(await upstream_error(response))
         try:
@@ -377,7 +390,8 @@ def create_app(settings=None, *, transport=None, api_key=None):
         finally:
             await close(response)
         headers = response_headers(response, translated=True)
-        app.state.models[key] = (time.monotonic() + MODELS_TTL, payload, headers)
+        if not query:  # Only the plain catalog is cached, so arbitrary queries cannot grow memory.
+            app.state.models["catalog"] = (time.monotonic() + MODELS_TTL, payload, headers)
         return payload, headers
 
     @app.get("/v1/models")
@@ -419,11 +433,13 @@ def create_app(settings=None, *, transport=None, api_key=None):
         body = parse_json(await request.body())
         translated, ignored = translate_request(body, strict=settings.strict)
         request.state.model = translated["model"]
+        options = body.get("stream_options")
+        include_usage = bool(body.get("stream") and isinstance(options, dict) and options.get("include_usage"))
         response = await send(request, "POST", "/responses", translated)
         if not response.is_success:
             return await upstream_error(response)
         headers = {**response_headers(response, translated=True), **ignored_header(ignored)}
-        state = ChatStream(translated["model"], include_usage=bool((body.get("stream_options") or {}).get("include_usage")))
+        state = ChatStream(translated["model"], include_usage=include_usage)
 
         async def converted():
             try:

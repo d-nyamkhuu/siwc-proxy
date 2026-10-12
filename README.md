@@ -19,6 +19,16 @@ framework, or tool that lets you set a base URL.
 - **Errors in OpenAI's shape and status.** For example, a plan usage limit becomes
   a 429 `RateLimitError`, so normal client backoff works.
 
+> [!IMPORTANT]
+> **Personal, local use only.** This is an independent open-source project, not
+> affiliated with or endorsed by OpenAI. It lets *you* use *your own* ChatGPT plan
+> from tools on your own computer. Don't host it for others, expose it publicly,
+> or share access to your plan. OpenAI's token-sharing docs cover open-source and
+> locally hosted apps; paid or remotely hosted products need OpenAI's approval
+> through its interest form (see the [token-sharing docs](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)).
+> Sign in with ChatGPT token sharing is a preview, and the ChatGPT backend this
+> proxy talks to can change or break without notice. Usage counts against your plan.
+
 ## Quick start
 
 Requires [uv](https://docs.astral.sh/uv/). uv installs a suitable Python (3.12+) if needed.
@@ -75,6 +85,10 @@ uv tool install .
 
 Every command accepts `--data-dir` (or `SIWC_PROXY_DATA_DIR`) to choose a credential directory.
 Use one directory per account.
+
+`serve --host` can bind a non-loopback interface for Docker or LAN use, but the
+proxy speaks plain HTTP: the key and your prompts then cross the network
+unencrypted. See the warning in [docs/proxy.md](docs/proxy.md#docker-localhost-and-lan-access).
 
 See **[docs/proxy.md](docs/proxy.md)** for configuration, routes, the Chat
 translation rules, error mapping, Docker/LAN access, and the security model.

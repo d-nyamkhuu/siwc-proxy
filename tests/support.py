@@ -1,6 +1,7 @@
 """Shared fakes: saved credentials, an in-memory OpenAI (issuer + API), and SSE helpers."""
 
 import json
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -105,6 +106,12 @@ def write_credentials(directory, **account):
 
 def saved(directory):
     return json.loads((directory / "credentials.json").read_text())
+
+
+def assert_private(path):
+    """Owner-only file mode on POSIX; on Windows files rely on the profile folder's access rules."""
+    if os.name == "posix":
+        assert path.stat().st_mode & 0o777 == 0o600
 
 
 class FakeOpenAI:

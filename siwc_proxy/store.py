@@ -38,20 +38,6 @@ class Account(BaseModel):
     expires_at: int | None = None
     earliest_refresh_at: int | None = None
 
-    @model_validator(mode="before")
-    @classmethod
-    def legacy(cls, data):
-        # signin_cli.py stored a "scopes" list and float timestamps.
-        if isinstance(data, dict):
-            data = dict(data)
-            if "scope" not in data and isinstance(data.get("scopes"), list):
-                data["scope"] = " ".join(data.pop("scopes"))
-            for key in ("expires_at", "earliest_refresh_at"):
-                if isinstance(data.get(key), float):
-                    data[key] = int(data[key])
-            data.pop("expires_in", None)
-        return data
-
     @property
     def scopes(self):
         return set(self.scope.split())
@@ -105,10 +91,23 @@ class Record(BaseModel):
         return self.account.state if self.account else "signed_out"
 
 
-def write_private(path, text):
-    """Atomically replace path with owner-only permissions."""
+def private_dir(path):
+    """Create an owner-only directory, tightening one we own that others can read.
+
+    On Windows, files inherit the access rules of the user profile folder instead.
+    """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name == "posix":
+        stat = path.stat()
+        if stat.st_mode & 0o077 and stat.st_uid == os.geteuid():
+            path.chmod(0o700)
+
+
+def private_temp(path, text):
+    """A complete owner-only file next to path, ready to move into place."""
+    path = Path(path)
+    private_dir(path.parent)
     fd, temp = tempfile.mkstemp(dir=path.parent, prefix="." + path.name + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as file:
@@ -117,10 +116,32 @@ def write_private(path, text):
             file.write(text)
             file.flush()
             os.fsync(file.fileno())
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
+    return temp
+
+
+def write_private(path, text):
+    """Atomically replace path with owner-only permissions."""
+    temp = private_temp(path, text)
+    try:
         os.replace(temp, path)
     except BaseException:
         Path(temp).unlink(missing_ok=True)
         raise
+
+
+def create_private(path, text):
+    """Atomically create path with owner-only permissions; False if it already exists (another process won)."""
+    temp = private_temp(path, text)
+    try:
+        os.link(temp, path)
+    except FileExistsError:
+        return False
+    finally:
+        Path(temp).unlink(missing_ok=True)
+    return True
 
 
 class Store:
@@ -163,7 +184,7 @@ class Store:
     async def transaction(self):
         """Exclusive section for read-modify-write, shared with other processes using this directory."""
         async with self._lock:
-            self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            private_dir(self.directory)
             try:
                 await anyio.to_thread.run_sync(self._file_lock.acquire)
             except Timeout:
