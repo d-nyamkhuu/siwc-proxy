@@ -1,6 +1,6 @@
 [project]
 name = "siwc-proxy"
-version = "0.2.1"
+version = "0.2.2"
 description = "Local OpenAI-compatible API proxy for Sign in with ChatGPT token sharing"
 readme = "README.md"
 license = "MIT"
