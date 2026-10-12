@@ -572,6 +572,25 @@ def test_logged_paths_and_models_cannot_forge_lines(directory, fake, caplog):
     assert any("model=m?FAKE" in line for line in lines) and any("/v1/nope?FAKE" in line for line in lines)
 
 
+@pytest.mark.parametrize("path,body", [("/v1/chat/completions", BODY), ("/v1/chat/completions", {**BODY, "stream": True}),
+                                       ("/v1/responses", {"model": "m", "input": "Hi"}),
+                                       ("/v1/responses", {"model": "m", "input": "Hi", "stream": True})])
+def test_access_log_reports_prompt_cache_hits(directory, fake, caplog, path, body):
+    caplog.set_level("INFO", logger="siwc_proxy")
+    warm = text_events()
+    warm[-1]["response"]["usage"]["input_tokens_details"]["cached_tokens"] = 8
+    with running(directory, fake) as (client, *_):
+        assert client.post(path, json=body).status_code == 200
+        fake.api = streamed(warm)
+        assert client.post(path, json=body).status_code == 200
+        fake.api = streamed(text_events()[:-1])  # no terminal response, so no usage
+        client.post(path, json=body)
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("POST /v1/")]
+    assert lines[0].endswith(" input=10 cached=2 (20%) output=4 cache_overall=20%")
+    assert lines[1].endswith(" input=10 cached=8 (80%) output=4 cache_overall=50%")
+    assert "cached=" not in lines[2]
+
+
 @pytest.mark.parametrize("options", ["yes", ["include_usage"], {"include_usage": True}])
 def test_stream_options_without_streaming_is_ignored(directory, fake, options):
     with running(directory, fake) as (client, *_):

@@ -23,7 +23,7 @@ from .chat import ChatStream, translate_request
 from .config import Settings
 from .constants import RESOURCE, RETRYABLE_CODES, USAGE_URL
 from .errors import OpenAIError, error_code, no_retry, normalize_error_body, protocol_error
-from .sse import encode_sse, response_events, with_terminal_output
+from .sse import encode_sse, response_events, token_usage, with_terminal_output
 from .store import CredentialFileError, Store
 
 log = logging.getLogger("siwc_proxy")
@@ -59,6 +59,7 @@ class Boundary:
 
     def __init__(self, app, settings, api_key):
         self.app, self.settings, self.key = app, settings, api_key.encode()
+        self.input_tokens = self.cached_tokens = 0  # Since startup, for the overall prompt cache hit rate.
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -92,10 +93,21 @@ class Boundary:
         finally:
             model = scope.get("state", {}).get("model")
             path = "/auth/start/…" if scope["path"].startswith("/auth/start/") else printable(scope["path"])
-            log.info("%s %s %s%s%s %.0fms", scope["method"], path, seen.get("status", "-"),
+            log.info("%s %s %s%s%s %.0fms%s", scope["method"], path, seen.get("status", "-"),
                      f" model={printable(model)}" if isinstance(model, str) else "",
                      f" request_id={printable(seen['request_id'])}" if seen.get("request_id") else "",
-                     (time.perf_counter() - started) * 1000)
+                     (time.perf_counter() - started) * 1000, self.usage(scope.get("state", {}).get("usage")))
+
+    def usage(self, counts):
+        """Token counts and prompt cache hit rates (cached share of input tokens) for the access log."""
+        if not counts:
+            return ""
+        input_tokens, cached, output = counts
+        self.input_tokens += input_tokens
+        self.cached_tokens += cached
+        rate = f" ({cached / input_tokens:.0%})" if input_tokens else ""
+        overall = f" cache_overall={self.cached_tokens / self.input_tokens:.0%}" if self.input_tokens else ""
+        return f" input={input_tokens} cached={cached}{rate} output={output}{overall}"
 
 
 class Relayed(Exception):
@@ -298,10 +310,13 @@ def create_app(settings=None, *, transport=None, api_key=None):
                         headers={**response_headers(response, translated=True), **no_retry(error_code(content))},
                         media_type="application/json")
 
-    def relay(response, extra=None):
+    def relay(request, response, extra=None):
+        def record(terminal):
+            request.state.usage = token_usage(terminal)
+
         async def raw():
             try:
-                async for chunk in with_terminal_output(response.aiter_bytes()):
+                async for chunk in with_terminal_output(response.aiter_bytes(), record):
                     yield chunk
             finally:
                 await close(response)
@@ -403,10 +418,11 @@ def create_app(settings=None, *, transport=None, api_key=None):
         if not response.is_success:
             return await upstream_error(response)
         if streaming:
-            return relay(response, ignored_header(ignored))
+            return relay(request, response, ignored_header(ignored))
         headers = {**response_headers(response, translated=True), **ignored_header(ignored)}
         try:
             result = await responses_api.aggregate(response_events(response))
+            request.state.usage = token_usage(result)
         except OpenAIError as error:
             return error.response(headers)
         except httpx.HTTPError as error:
@@ -438,6 +454,7 @@ def create_app(settings=None, *, transport=None, api_key=None):
                     for chunk in chunks:
                         yield chunk
                     if state.terminal is not None:
+                        request.state.usage = token_usage(state.terminal)
                         return
                 raise protocol_error()
             finally:

@@ -40,24 +40,38 @@ def fill_output(response, items):
     return response
 
 
+def token_usage(response):
+    """(input, cached input, output) tokens a terminal response reports, or None."""
+    usage = response.get("usage") if isinstance(response, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    details = usage.get("input_tokens_details")
+    cached = details.get("cached_tokens", 0) if isinstance(details, dict) else 0
+    counts = usage.get("input_tokens"), cached, usage.get("output_tokens")
+    return counts if all(type(n) is int and n >= 0 for n in counts) else None
+
+
 def remember_item(items, event):
     if isinstance(event.get("output_index"), int) and isinstance(event.get("item"), dict):
         items[event["output_index"]] = event["item"]
 
 
-async def with_terminal_output(chunks):
-    """Relay Responses SSE bytes unchanged except for terminal events that need `fill_output`."""
+async def with_terminal_output(chunks, on_terminal=None):
+    """Relay Responses SSE bytes unchanged except for terminal events that need `fill_output`.
+
+    `on_terminal` is called with the terminal response.
+    """
     buffer, items = b"", {}
     async for chunk in chunks:
         buffer += chunk
         while match := re.search(rb"\r\n\r\n|\n\n|\r\r", buffer):
             block, buffer = buffer[:match.end()], buffer[match.end():]
-            yield patch_block(block, items)
+            yield patch_block(block, items, on_terminal)
     if buffer:
         yield buffer
 
 
-def patch_block(block, items):
+def patch_block(block, items, on_terminal=None):
     if not any(name.encode() in block for name in ("response.output_item.done", *TERMINAL_EVENTS)):
         return block
     try:
@@ -69,8 +83,11 @@ def patch_block(block, items):
         return block
     if event.get("type") == "response.output_item.done":
         remember_item(items, event)
-    elif event.get("type") in TERMINAL_EVENTS and isinstance(event.get("response"), dict) \
-            and not event["response"].get("output") and items:
+    elif event.get("type") in TERMINAL_EVENTS and isinstance(event.get("response"), dict):
+        if on_terminal:
+            on_terminal(event["response"])
+        if event["response"].get("output") or not items:
+            return block
         fill_output(event["response"], items)
         names = "".join(line + "\n" for line in lines if line.startswith("event:"))
         return (names + "data: " + json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n\n").encode()

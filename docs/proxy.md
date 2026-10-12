@@ -246,6 +246,14 @@ never sent as an ID; a proxy restart starts new sessions. Usage reports hits in
 live tests, cached tokens grew with the history to about 80% of the prompt,
 but an occasional turn missed.
 
+The access log shows each inference request's token counts and cache hit rate,
+the cached share of its input tokens, plus `cache_overall`, the rate across all
+requests since the proxy started:
+
+```text
+POST /v1/chat/completions 200 model=gpt-6.1-sol request_id=req_… 4834ms input=3611 cached=3456 (96%) output=11 cache_overall=48%
+```
+
 ## Errors
 
 All errors use OpenAI's `{"error": {"message", "type", "param", "code"}}` shape,
