@@ -22,6 +22,19 @@ from .constants import USAGE_URL
 from .errors import OpenAIError
 from .store import CredentialFileError, Store
 
+
+def remember_data_dir(ctx, param, value):
+    if value is not None:
+        ctx.ensure_object(dict)["data_dir"] = value
+
+
+# On the group and on every command, so it works before or after the command name. The environment variable is
+# left to Settings, so a flag at either level wins over it.
+data_dir_option = click.option(
+    "--data-dir", type=click.Path(file_okay=False, path_type=Path), expose_value=False, callback=remember_data_dir,
+    help="Credential directory (default: SIWC_PROXY_DATA_DIR, else the per-user data directory).")
+
+
 def make_settings(ctx, **overrides):
     values = {k: v for k, v in overrides.items() if v not in (None, ())}
     if ctx.obj.get("data_dir"):
@@ -78,16 +91,16 @@ def open_link(url, browser):
 
 
 @click.group()
-@click.option("--data-dir", type=click.Path(file_okay=False, path_type=Path), envvar="SIWC_PROXY_DATA_DIR",
-              help="Credential directory (default: the per-user data directory).")
+@data_dir_option
 @click.version_option(package_name="siwc-proxy")
 @click.pass_context
-def main(ctx, data_dir):
+def main(ctx):
     """Local OpenAI-compatible API backed by Sign in with ChatGPT."""
-    ctx.obj = {"data_dir": data_dir}
+    ctx.ensure_object(dict)  # shared with the command, whose own --data-dir lands here too
 
 
 @main.command()
+@data_dir_option
 @click.option("--host", help="Interface to bind (default 127.0.0.1). The proxy speaks plain HTTP; "
               "only bind other interfaces on a trusted network.")
 @click.option("--port", type=click.IntRange(1, 65535), help="Port (default 8787).")
@@ -118,9 +131,11 @@ def serve(ctx, **options):
 
 
 @main.command()
+@data_dir_option
 @click.option("--consent", is_flag=True, help="Ask again for permission to use the ChatGPT plan.")
-@click.option("--port", type=click.IntRange(0, 65535), default=None,
-              help="Port for the sign-in callback when no proxy is running (default: any free port).")
+@click.option("--port", type=click.IntRange(1, 65535), default=None,
+              help="Port of the running proxy (default 8787). With no proxy running, the sign-in callback "
+              "listens there (default: any free port).")
 @click.option("--timeout", type=click.FloatRange(min=1, max=3600), default=300, show_default=True)
 @click.option("--browser/--no-browser", default=True, help="Open the sign-in link in a browser.")
 @click.option("--remote", is_flag=True, help="Sign in with a browser on another computer: open the link there, "
@@ -128,7 +143,7 @@ def serve(ctx, **options):
 @click.pass_context
 def login(ctx, consent, port, timeout, browser, remote):
     """Sign in through the browser (via the running proxy if there is one)."""
-    settings = make_settings(ctx)
+    settings = make_settings(ctx, port=port)
     configure_logging("warning")
     if remote:
         return remote_login(settings, consent, port)
@@ -239,6 +254,7 @@ def report(status):
 
 
 @main.command()
+@data_dir_option
 @click.option("--forget", is_flag=True, help="Also delete the registration (needed to switch accounts).")
 @click.pass_context
 def logout(ctx, forget):
@@ -258,6 +274,7 @@ def logout(ctx, forget):
 
 
 @main.command()
+@data_dir_option
 @click.option("--show-key", is_flag=True, help="Also print the local proxy API key.")
 @click.option("--json", "as_json", is_flag=True, help="Machine-readable output on stdout.")
 @click.pass_context
@@ -281,6 +298,7 @@ def status(ctx, show_key, as_json):
 
 
 @main.command()
+@data_dir_option
 @click.pass_context
 def token(ctx):
     """Print a current ChatGPT access token (refreshing if needed) to stdout."""

@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SIWC_PROXY_", validate_assignment=True)
 
     host: str = "127.0.0.1"
-    port: int = Field(8787, ge=0, le=65535)
+    port: int = Field(8787, ge=1, le=65535)
     data_dir: Path = Field(default_factory=default_data_dir)
     api_key: SecretStr | None = None
     # Extra Host header values accepted besides loopback; "name" matches any port, "*" disables the check.

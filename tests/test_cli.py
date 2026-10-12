@@ -23,6 +23,17 @@ def invoke(directory, *args, **kwargs):
     return CliRunner().invoke(cli.main, ["--data-dir", str(directory), *args], catch_exceptions=False, **kwargs)
 
 
+@pytest.mark.parametrize("args", [["--data-dir", "{flag}", "status"], ["status", "--data-dir", "{flag}"],
+                                  ["--data-dir", "{other}", "status", "--data-dir", "{flag}"], ["status"]],
+                         ids=["before", "after", "after-wins", "env"])
+def test_data_dir_before_or_after_the_command(tmp_path, args):
+    folders = {"flag": str(tmp_path / "flag"), "other": str(tmp_path / "other")}
+    result = CliRunner().invoke(cli.main, [arg.format(**folders) for arg in args] + ["--json"],
+                                env={"SIWC_PROXY_DATA_DIR": str(tmp_path / "env")}, catch_exceptions=False)
+    expected = tmp_path / ("env" if args == ["status"] else "flag")
+    assert json.loads(result.stdout)["data_dir"] == str(expected.resolve())
+
+
 def test_status_hides_tokens_and_shows_key_on_request(directory):
     result = invoke(directory, "status", "--json")
     status = json.loads(result.stdout)
@@ -122,7 +133,8 @@ def test_login_refuses_an_unexpected_link_from_the_proxy(tmp_path, monkeypatch):
     assert result.exit_code == 1 and "unexpected sign-in link" in result.output and not opened
 
 
-def test_login_through_a_running_proxy(directory, fake, monkeypatch):
+@pytest.mark.parametrize("by_flag", [False, True], ids=["env", "flag"])
+def test_login_through_a_running_proxy(directory, fake, monkeypatch, by_flag):
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
@@ -135,8 +147,9 @@ def test_login_through_a_running_proxy(directory, fake, monkeypatch):
 
     monkeypatch.setattr(cli, "open_link", browser)
     with live_server(app, sock):
-        result = CliRunner().invoke(cli.main, ["--data-dir", str(directory), "login", "--no-browser"],
-                                    env={"SIWC_PROXY_PORT": str(port), "SIWC_PROXY_API_KEY": KEY})
+        args, env = (["--port", str(port)], {}) if by_flag else ([], {"SIWC_PROXY_PORT": str(port)})
+        result = CliRunner().invoke(cli.main, ["--data-dir", str(directory), "login", "--no-browser", *args],
+                                    env={**env, "SIWC_PROXY_API_KEY": KEY})
     assert result.exit_code == 0, result.output
     assert opened[0].startswith(f"http://127.0.0.1:{port}/auth/start/") and "Signed in as" in result.output
 

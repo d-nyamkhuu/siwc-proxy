@@ -7,7 +7,8 @@ replaces that key with the account's OAuth access token. The two credentials are
 
 ## Configuration
 
-Every setting can come from a `serve` flag or a `SIWC_PROXY_*` environment variable:
+Every setting can come from a `serve` flag or a `SIWC_PROXY_*` environment variable.
+A flag wins over the environment. `--data-dir` works on every command:
 
 | Flag | Environment | Default | Meaning |
 | --- | --- | --- | --- |
@@ -26,11 +27,11 @@ To block DNS rebinding, the proxy accepts only these `Host` headers: `127.0.0.1`
 `localhost`, and `[::1]`, each on its own port. Add more as needed:
 
 ```bash
-uv run siwc-proxy serve --allowed-host host.docker.internal
+siwc-proxy serve --allowed-host host.docker.internal
 ```
 
 ```bash
-uv run siwc-proxy serve --host 0.0.0.0 --allowed-host my-laptop.lan
+siwc-proxy serve --host 0.0.0.0 --allowed-host my-laptop.lan
 ```
 
 A bare name matches any port; `name:port` matches exactly; `*` disables the check.
@@ -64,7 +65,8 @@ Ways to start a sign-in:
 1. `siwc-proxy serve` prints a link when not signed in.
    API calls also answer `401 chatgpt_login_required` with the link in the message.
 2. `siwc-proxy login` with the proxy running asks the proxy for a link, opens it,
-   and waits. No restart is needed.
+   and waits. No restart is needed. If the proxy isn't on port 8787, pass the same
+   `--port` (or `SIWC_PROXY_PORT`) as `serve`.
 3. `siwc-proxy login` with no proxy running serves the callback on a free
    loopback port (`--port` to pick one) and exits when done.
 4. `siwc-proxy login --remote` for a machine you reach over SSH, or any

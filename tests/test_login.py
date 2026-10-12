@@ -39,7 +39,7 @@ def test_first_sign_in_registers_and_saves(tmp_path, fake):
         assert client.post("/v1/chat/completions", json=BODY).status_code == 401
         params = start(client)
         assert params["client_id"] == "dynamic_agent_client"
-        assert params["agent_name_hint"] == "SIWC OpenAI proxy"
+        assert params["agent_name_hint"] == "siwc-proxy"
         assert params["resource"] == RESOURCE
         assert params["redirect_uri"] == BASE + "/auth/callback"
         assert params["code_challenge_method"] == "S256" and params["code_challenge"]

@@ -1,7 +1,7 @@
 # siwc-proxy
 
 A local **OpenAI-compatible API** backed by
-[Sign in with ChatGPT token sharing](https://developers.openai.com/siwc/token-sharing-open-source/sign-in).
+[Sign in with ChatGPT token sharing](https://developers.openai.com/siwc/token-sharing-open-source).
 Sign in once; the proxy keeps the ChatGPT plan credential fresh and serves
 `/v1/chat/completions`, `/v1/responses`, and `/v1/models` to any OpenAI SDK,
 framework, or tool that lets you set a base URL.
@@ -26,7 +26,8 @@ framework, or tool that lets you set a base URL.
 > from tools on your own computer. Don't host it for others, expose it publicly,
 > or share access to your plan. OpenAI's token-sharing docs cover open-source and
 > locally hosted apps; paid or remotely hosted products need OpenAI's approval
-> through its interest form (see the [token-sharing docs](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)).
+> through its interest form (see the [token-sharing docs](https://developers.openai.com/siwc/token-sharing-open-source)).
+> Current limits are listed under [preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
 > Sign in with ChatGPT token sharing is a preview, and the ChatGPT backend this
 > proxy talks to can change or break without notice. Usage counts against your plan.
 
@@ -109,7 +110,8 @@ local proxy; it is never sent to OpenAI.
 | `siwc-proxy status [--json] [--show-key]` | Account, state, scopes, expiry. Never prints tokens. |
 | `siwc-proxy token` | Print a fresh access token to stdout, for scripts. |
 
-Every command accepts `--data-dir` (or `SIWC_PROXY_DATA_DIR`) to choose a credential directory.
+Every command accepts `--data-dir`, before or after the command name (or `SIWC_PROXY_DATA_DIR`),
+to choose a credential directory.
 Use one directory per account.
 
 `serve --host` can bind a non-loopback interface for Docker or LAN use, but the
@@ -152,7 +154,9 @@ repository `d-nyamkhuu/siwc-proxy`, workflow `release.yml`, environment `pypi`.
 
 ## References
 
+- [Token sharing for open-source and locally hosted apps](https://developers.openai.com/siwc/token-sharing-open-source)
 - [Registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
 - [Profiles and sessions](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)
 - [Token reference](https://developers.openai.com/siwc/token-sharing-open-source/token-reference)
 - [Models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+- [Preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)

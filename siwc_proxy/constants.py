@@ -6,7 +6,7 @@ RESOURCE = "https://api.openai.com/v1"
 DIRECT_SCOPE = "chatgpt.tokens.use.direct"
 SCOPES = "openid profile email offline_access resource.invoke " + DIRECT_SCOPE
 DYNAMIC_CLIENT = "dynamic_agent_client"
-AGENT_NAME = "SIWC OpenAI proxy"
+AGENT_NAME = "siwc-proxy"
 USAGE_URL = "https://chatgpt.com/settings/usage"
 
 # Seconds before expiry at which an access token is treated as expired.
