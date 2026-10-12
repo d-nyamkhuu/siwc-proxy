@@ -8,7 +8,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 import click
-import httpx
+import httpx2
 import pytest
 from click.testing import CliRunner
 from fastapi.responses import JSONResponse
@@ -69,7 +69,7 @@ def test_standalone_login_serves_its_own_callback(tmp_path, monkeypatch):
 
     def browser(url, open_browser):
         def act():
-            with httpx.Client(trust_env=False, timeout=5) as client:
+            with httpx2.Client(trust_env=False, timeout=5) as client:
                 response = client.get(url, follow_redirects=False)
                 params = {k: v[0] for k, v in parse_qs(urlsplit(response.headers["location"]).query).items()}
                 fake.codes["c"] = ("oaiapp_cli", params["nonce"], "openid " + "chatgpt.tokens.use.direct", "sub-1")
@@ -122,12 +122,12 @@ def test_key_is_not_sent_to_an_impostor_on_the_port(tmp_path):
 def test_login_refuses_an_unexpected_link_from_the_proxy(tmp_path, monkeypatch):
     def proxy(request):
         if request.url.path == "/auth/status":
-            return httpx.Response(200, json={"state": "signed_out"})
-        return httpx.Response(200, json={"url": "file:///etc/passwd"})
+            return httpx2.Response(200, json={"state": "signed_out"})
+        return httpx2.Response(200, json={"url": "file:///etc/passwd"})
 
     opened = []
-    monkeypatch.setattr(cli, "running_proxy", lambda settings, key: httpx.Client(
-        base_url=settings.origin, transport=httpx.MockTransport(proxy)))
+    monkeypatch.setattr(cli, "running_proxy", lambda settings, key: httpx2.Client(
+        base_url=settings.origin, transport=httpx2.MockTransport(proxy)))
     monkeypatch.setattr(cli, "open_link", lambda url, browser: opened.append(url))
     result = CliRunner().invoke(cli.main, ["--data-dir", str(tmp_path), "login", "--no-browser"])
     assert result.exit_code == 1 and "unexpected sign-in link" in result.output and not opened

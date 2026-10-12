@@ -7,7 +7,7 @@ import socket
 import threading
 
 import anyio
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -20,7 +20,7 @@ from support import (BASE, BODY, HEADERS, KEY, SSE_TYPE, TEXT_ITEM, Chunks, asse
 
 
 def streamed(events, **headers):
-    return lambda request: httpx.Response(200, headers={**SSE_TYPE, **headers},
+    return lambda request: httpx2.Response(200, headers={**SSE_TYPE, **headers},
                                           stream=Chunks(sse(events)))
 
 
@@ -73,7 +73,7 @@ def test_lenient_chat_reports_ignored_params(directory, fake):
 @pytest.mark.parametrize("streaming", [False, True])
 def test_interleaved_tools_have_dense_indexes_and_no_duplicates(directory, fake, streaming):
     stream = Chunks(sse(tool_events()), size=1)
-    fake.api = lambda r: httpx.Response(200, headers=SSE_TYPE, stream=stream)
+    fake.api = lambda r: httpx2.Response(200, headers=SSE_TYPE, stream=stream)
     with running(directory, fake) as (client, *_):
         response = client.post("/v1/chat/completions", json={**BODY, "stream": streaming})
         if streaming:
@@ -127,7 +127,7 @@ def test_incomplete_and_refusal(directory, fake, reason, finish, streaming):
 @pytest.mark.parametrize("streaming", [False, True])
 def test_stream_failures_never_report_success(directory, fake, bad, streaming):
     stream = Chunks(bad)
-    fake.api = lambda r: httpx.Response(200, headers={**SSE_TYPE, "x-request-id": "req-failed"}, stream=stream)
+    fake.api = lambda r: httpx2.Response(200, headers={**SSE_TYPE, "x-request-id": "req-failed"}, stream=stream)
     with running(directory, fake) as (client, fake, app):
         response = client.post("/v1/chat/completions", json={**BODY, "stream": streaming})
         assert response.headers["x-request-id"] == "req-failed"
@@ -161,7 +161,7 @@ def test_failed_responses_keep_their_meaning(directory, fake, code, status, endp
 
 
 def test_admission_usage_limit_is_not_retried_by_sdks(directory, fake):
-    fake.api = lambda r: httpx.Response(429, json={"error": {
+    fake.api = lambda r: httpx2.Response(429, json={"error": {
         "message": "Limit", "type": "rate_limit_error", "code": "subscription_sharing_usage_limit_exceeded"}})
     with running(directory, fake) as (client, *_):
         response = client.post("/v1/responses", json={"model": "m", "input": "Hi"})
@@ -219,7 +219,7 @@ def test_multiline_sse_comments_crlf_and_bom(directory, fake):
     split = event.index('"response":')
     raw = ("﻿: ping\r\nevent: response.completed\r\ndata: " + event[:split] + "\r\ndata: " + event[split:]
            + "\r\n\r\n").encode()
-    fake.api = lambda r: httpx.Response(200, headers=SSE_TYPE, stream=Chunks(raw, size=1))
+    fake.api = lambda r: httpx2.Response(200, headers=SSE_TYPE, stream=Chunks(raw, size=1))
     with running(directory, fake) as (client, *_):
         response = client.post("/v1/chat/completions", json=BODY)
         assert response.status_code == 200
@@ -265,7 +265,7 @@ def empty_terminal_events():
 def test_relayed_stream_terminal_gets_output(directory, fake):
     events, item = empty_terminal_events()
     raw = sse(events).replace(b"\n", b"\r\n")
-    fake.api = lambda r: httpx.Response(200, stream=Chunks(gzip.compress(raw), size=5), headers={
+    fake.api = lambda r: httpx2.Response(200, stream=Chunks(gzip.compress(raw), size=5), headers={
         "content-encoding": "gzip", "content-length": "999", "content-type": "text/event-stream"})
     with running(directory, fake) as (client, *_):
         response = client.post("/v1/responses", json={"model": "m", "input": "Hi", "stream": True})
@@ -323,7 +323,7 @@ def test_responses_stream_is_relayed_unchanged(directory, fake):
     raw = sse(text_events()) + b'event: new.event\ndata: {"unknown":true}\n\n'
     compressed = gzip.compress(raw)
     stream = Chunks(compressed)
-    fake.api = lambda r: httpx.Response(200, stream=stream, headers={
+    fake.api = lambda r: httpx2.Response(200, stream=stream, headers={
         "content-encoding": "gzip", "content-type": "text/event-stream", "connection": "keep-alive, x-hop",
         "x-hop": "remove", "set-cookie": "a=1"})
     with running(directory, fake) as (client, *_):
@@ -338,7 +338,7 @@ def test_responses_stream_is_relayed_unchanged(directory, fake):
                                        ("/v1/responses", {"model": "m", "input": "Hi"}),
                                        ("/v1/responses", {"model": "m", "input": "Hi", "stream": True})])
 def test_stream_without_content_type(directory, fake, path, body):
-    fake.api = lambda r: httpx.Response(200, stream=Chunks(sse(text_events())))
+    fake.api = lambda r: httpx2.Response(200, stream=Chunks(sse(text_events())))
     with running(directory, fake) as (client, *_):
         response = client.post(path, json=body)
         assert response.status_code == 200
@@ -366,7 +366,7 @@ def test_responses_unsupported_features(directory, fake, body, param):
 @pytest.mark.parametrize("endpoint", ["chat/completions", "responses"])
 def test_upstream_errors_preserved(directory, fake, status, endpoint):
     body = b'{"error":{"message":"Denied","code":"permission_denied"}}'
-    fake.api = lambda r: httpx.Response(status, content=body, headers={
+    fake.api = lambda r: httpx2.Response(status, content=body, headers={
         "x-request-id": "req-denied", "retry-after": "2", "x-ratelimit-remaining-tokens": "100"})
     with running(directory, fake) as (client, fake, app):
         response = client.post("/v1/" + endpoint, json=BODY if endpoint.startswith("chat") else {"model": "m", "input": "x"})
@@ -383,7 +383,7 @@ def test_upstream_errors_preserved(directory, fake, status, endpoint):
     (b"<html>gateway</html>", "OpenAI returned HTTP 429.", None),
 ])
 def test_detail_bodies_become_openai_errors(directory, fake, body, message, code):
-    fake.api = lambda r: httpx.Response(429, content=body)
+    fake.api = lambda r: httpx2.Response(429, content=body)
     with running(directory, fake) as (client, *_):
         response = client.post("/v1/chat/completions", json=BODY)
         assert response.status_code == 429
@@ -392,7 +392,7 @@ def test_detail_bodies_become_openai_errors(directory, fake, body, message, code
 
 def test_retryable_admission_503_is_retried(directory, fake, monkeypatch):
     monkeypatch.setattr("siwc_proxy.server.backoff", lambda attempt: 0)
-    answers = iter([httpx.Response(503, json={"detail": {"code": "subscription_sharing_usage_unavailable"}},
+    answers = iter([httpx2.Response(503, json={"detail": {"code": "subscription_sharing_usage_unavailable"}},
                                    headers={"retry-after": "0"})])
     fake.api = lambda r: next(answers, None) or streamed(text_events())(r)
     with running(directory, fake) as (client, fake, _):
@@ -401,14 +401,14 @@ def test_retryable_admission_503_is_retried(directory, fake, monkeypatch):
 
 
 def test_other_503_is_not_retried(directory, fake):
-    fake.api = lambda r: httpx.Response(503, json={"error": {"message": "Down", "code": "overloaded"}})
+    fake.api = lambda r: httpx2.Response(503, json={"error": {"message": "Down", "code": "overloaded"}})
     with running(directory, fake) as (client, fake, _):
         assert client.post("/v1/chat/completions", json=BODY).status_code == 503
         assert len(fake.calls) == 1
 
 
-@pytest.mark.parametrize("error,status", [(httpx.ConnectError("secret network detail"), 502),
-                                          (httpx.ReadTimeout("secret timeout detail"), 504)])
+@pytest.mark.parametrize("error,status", [(httpx2.ConnectError("secret network detail"), 502),
+                                          (httpx2.ReadTimeout("secret timeout detail"), 504)])
 def test_network_errors_are_sanitized(directory, fake, error, status):
     def fail(request):
         raise error
@@ -424,10 +424,10 @@ def test_network_error_after_stream_start(directory, fake, streaming):
     class Broken(Chunks):
         async def __aiter__(self):
             yield sse(text_events()[:4])
-            raise httpx.ReadTimeout("private provider detail")
+            raise httpx2.ReadTimeout("private provider detail")
 
     broken = Broken(b"")
-    fake.api = lambda r: httpx.Response(200, headers=SSE_TYPE, stream=broken)
+    fake.api = lambda r: httpx2.Response(200, headers=SSE_TYPE, stream=broken)
     with running(directory, fake) as (client, *_):
         response = client.post("/v1/chat/completions", json={**BODY, "stream": streaming})
         if streaming:
@@ -482,7 +482,7 @@ def test_unknown_routes_are_openai_shaped(directory, fake):
 # Models
 
 def test_models_catalog_and_retrieve(directory, fake):
-    fake.api = lambda r: httpx.Response(200, json={"models": [
+    fake.api = lambda r: httpx2.Response(200, json={"models": [
         {"slug": "test-model", "display_name": "Test", "visibility": "list"},
         {"slug": "hidden", "visibility": "hidden"}]})
     with running(directory, fake) as (client, fake, _):
@@ -496,7 +496,7 @@ def test_models_catalog_and_retrieve(directory, fake):
 
 
 def test_models_query_is_forwarded(directory, fake):
-    fake.api = lambda r: httpx.Response(200, json={"models": [{"slug": "m", "visibility": "list"}]})
+    fake.api = lambda r: httpx2.Response(200, json={"models": [{"slug": "m", "visibility": "list"}]})
     with running(directory, fake) as (client, fake, _):
         assert client.get("/v1/models?client_version=1&x=a%20b").status_code == 200
         assert fake.calls[-1].url.query == b"client_version=1&x=a%20b"
@@ -504,7 +504,7 @@ def test_models_query_is_forwarded(directory, fake):
 
 
 def test_models_are_slimmed(directory, fake):
-    fake.api = lambda r: httpx.Response(200, json={"models": [{
+    fake.api = lambda r: httpx2.Response(200, json={"models": [{
         "slug": "big", "visibility": "list", "display_name": "Big", "context_window": 1000,
         "supported_reasoning_levels": [{"effort": "low", "description": "fast"}, {"effort": "high"}],
         "base_instructions": "x" * 50_000, "shell_type": "default"}]})
@@ -514,7 +514,7 @@ def test_models_are_slimmed(directory, fake):
             "context_window": 1000, "supported_reasoning_levels": ["low", "high"]}]
 
 def test_invalid_catalog(directory, fake):
-    fake.api = lambda r: httpx.Response(200, json={"models": "nope"})
+    fake.api = lambda r: httpx2.Response(200, json={"models": "nope"})
     with running(directory, fake) as (client, *_):
         assert client.get("/v1/models").status_code == 502
 
@@ -624,7 +624,7 @@ def test_corrupt_credentials(directory, fake):
 def test_real_http_streaming_and_disconnect_cleanup(directory, fake, endpoint, disconnect):
     gate, closed = threading.Event(), threading.Event()
 
-    class Delayed(httpx.AsyncByteStream):
+    class Delayed(httpx2.AsyncByteStream):
         async def __aiter__(self):
             yield sse(text_events()[:4])
             while not gate.is_set():
@@ -637,12 +637,12 @@ def test_real_http_streaming_and_disconnect_cleanup(directory, fake, endpoint, d
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
-    fake.api = lambda r: httpx.Response(200, stream=Delayed(), headers={"content-type": "text/event-stream"})
+    fake.api = lambda r: httpx2.Response(200, stream=Delayed(), headers={"content-type": "text/event-stream"})
     app = create_app(Settings(data_dir=directory, api_key=KEY, port=port), transport=fake.transport)
     body = {**BODY, "stream": True} if endpoint.startswith("chat") else {"model": "m", "input": "Hi", "stream": True}
     try:
         with live_server(app, sock):
-            with httpx.Client(timeout=2, trust_env=False) as client:
+            with httpx2.Client(timeout=2, trust_env=False) as client:
                 with client.stream("POST", f"http://127.0.0.1:{port}/v1/{endpoint}", headers=HEADERS,
                                    json=body) as response:
                     assert response.status_code == 200

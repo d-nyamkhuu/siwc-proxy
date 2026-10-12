@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from html import escape
 
 import anyio
-import httpx
+import httpx2
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from starlette.datastructures import Headers
@@ -160,7 +160,7 @@ def model_entry(model):
 
 
 def network_error(error):
-    if isinstance(error, httpx.TimeoutException):
+    if isinstance(error, httpx2.TimeoutException):
         return OpenAIError("OpenAI request timed out.", status=504, code="upstream_timeout")
     return OpenAIError("Could not reach OpenAI.", status=502, code="upstream_connection_error")
 
@@ -202,10 +202,10 @@ def create_app(settings=None, *, transport=None, api_key=None):
     async def lifespan(app):
         app.state.active = set()
         auth.serving, auth.signed_in = True, anyio.Event()
-        timeout = httpx.Timeout(30, read=settings.read_timeout)
+        timeout = httpx2.Timeout(30, read=settings.read_timeout)
         # The transport retries connection failures, before any request is sent.
-        upstream_transport = transport or httpx.AsyncHTTPTransport(retries=MAX_RETRIES)
-        async with httpx.AsyncClient(transport=upstream_transport, trust_env=False, follow_redirects=False,
+        upstream_transport = transport or httpx2.AsyncHTTPTransport(retries=MAX_RETRIES)
+        async with httpx2.AsyncClient(transport=upstream_transport, trust_env=False, follow_redirects=False,
                                      timeout=timeout) as client:
             app.state.upstream = client
             try:
@@ -238,7 +238,7 @@ def create_app(settings=None, *, transport=None, api_key=None):
     async def relayed(request, error):
         return error.response
 
-    @app.exception_handler(httpx.HTTPError)
+    @app.exception_handler(httpx2.HTTPError)
     async def http_error(request, error):
         return network_error(error).response()
 
@@ -425,7 +425,7 @@ def create_app(settings=None, *, transport=None, api_key=None):
             request.state.usage = token_usage(result)
         except OpenAIError as error:
             return error.response(headers)
-        except httpx.HTTPError as error:
+        except httpx2.HTTPError as error:
             return network_error(error).response(headers)
         finally:
             await close(response)
@@ -468,7 +468,7 @@ def create_app(settings=None, *, transport=None, api_key=None):
                     yield b"data: [DONE]\n\n"
                 except OpenAIError as error:
                     yield encode_sse(error.payload)
-                except httpx.HTTPError as error:
+                except httpx2.HTTPError as error:
                     yield encode_sse(network_error(error).payload)
             return UpstreamStreamingResponse(sse(), headers=headers, media_type="text/event-stream",
                                              upstream=response, active=app.state.active)
@@ -478,7 +478,7 @@ def create_app(settings=None, *, transport=None, api_key=None):
             return JSONResponse(state.completion(), headers=headers)
         except OpenAIError as error:
             return error.response(headers)
-        except httpx.HTTPError as error:
+        except httpx2.HTTPError as error:
             return network_error(error).response(headers)
 
     return app
