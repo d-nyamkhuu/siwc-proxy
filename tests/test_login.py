@@ -4,7 +4,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 import anyio
-import httpx
+import httpx2
 import pytest
 
 from siwc_proxy.auth import ChatGPTAuth
@@ -126,7 +126,7 @@ def test_callback_validation(tmp_path, fake, tamper):
                 value = id_token("oaiapp_issued", nonce=params["nonce"], **claims)
                 if tamper == "signature":
                     value = value[:-4] + ("AAAA" if not value.endswith("AAAA") else "BBBB")
-                return httpx.Response(200, json={"access_token": "a", "refresh_token": "r", "expires_in": 60,
+                return httpx2.Response(200, json={"access_token": "a", "refresh_token": "r", "expires_in": 60,
                                                  "id_token": value})
             fake.token = token
         page = client.get("/auth/callback", params=query)
@@ -181,7 +181,7 @@ def test_logout_revokes_and_keeps_registration(directory, fake):
 
 def test_logout_retries_server_errors_then_gives_up_locally(directory, fake, monkeypatch):
     monkeypatch.setattr("siwc_proxy.auth.backoff", lambda attempt: 0)
-    fake.revoke = lambda form: httpx.Response(503)
+    fake.revoke = lambda form: httpx2.Response(503)
     auth = ChatGPTAuth(Settings(data_dir=directory, api_key=KEY), Store(directory), transport=fake.transport)
     assert anyio.run(auth.logout) is False
     assert len(fake.revocations) == 4

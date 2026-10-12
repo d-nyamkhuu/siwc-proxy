@@ -24,12 +24,11 @@ classifiers = [
 ]
 dependencies = [
     "anyio>=4.4",
-    "authlib>=1.7.2,<1.8",
+    "authlib>=1.8,<1.9",
     "click>=8.1",
     "fastapi>=0.115",
     "filelock>=3.16",
-    "httpx>=0.28,<0.29",
-    "httpx-sse>=0.4.3",
+    "httpx2>=2.13,<3",
     "itsdangerous>=2.2",
     "joserfc>=1.6",
     "platformdirs>=4.3",
@@ -48,7 +47,7 @@ siwc-proxy = "siwc_proxy.cli:main"
 
 [dependency-groups]
 dev = [
-    "openai>=2.54,<3",
+    "openai>=3,<4",
     "pytest>=8",
 ]
 
@@ -64,4 +63,4 @@ include = ["siwc_proxy", "tests", "docs", "README.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`:UserWarning"]
+filterwarnings = ["error::authlib.deprecate.AuthlibDeprecationWarning"]

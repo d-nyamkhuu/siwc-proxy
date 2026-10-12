@@ -7,7 +7,7 @@ import time
 from contextlib import contextmanager
 from urllib.parse import parse_qs
 
-import httpx
+import httpx2
 import uvicorn
 from fastapi.testclient import TestClient
 from joserfc import jwt
@@ -74,8 +74,8 @@ def parse_chunks(response):
             if line.startswith("data: ") and line != "data: [DONE]"]
 
 
-class Chunks(httpx.AsyncByteStream):
-    """A streamed body (unlike content=, which httpx pre-reads) that records being closed."""
+class Chunks(httpx2.AsyncByteStream):
+    """A streamed body (unlike content=, which httpx2 pre-reads) that records being closed."""
 
     def __init__(self, data, size=7):
         self.data, self.size, self.closed = data, size, False
@@ -122,30 +122,30 @@ class FakeOpenAI:
 
     def __init__(self):
         self.calls, self.token_calls, self.revocations = [], [], []
-        self.api = lambda request: httpx.Response(
+        self.api = lambda request: httpx2.Response(
             200, headers={"content-type": "text/event-stream", "x-request-id": "req-test"},
             stream=Chunks(sse(text_events())))
-        self.token = None  # optional override: callable(form) -> httpx.Response
-        self.revoke = lambda form: httpx.Response(200)
+        self.token = None  # optional override: callable(form) -> httpx2.Response
+        self.revoke = lambda form: httpx2.Response(200)
         self.codes = {}  # code -> (client_id, nonce, scope, sub)
         self.rotation = 0
         self.token_delay = 0
 
     @property
     def transport(self):
-        return httpx.MockTransport(self.handle)
+        return httpx2.MockTransport(self.handle)
 
     async def handle(self, request):
         self.calls.append(request)
         url = str(request.url.copy_with(query=None))
         if url == ISSUER + "/.well-known/openid-configuration":
-            return httpx.Response(200, json={
+            return httpx2.Response(200, json={
                 "issuer": ISSUER, "authorization_endpoint": ISSUER + "/oauth/authorize",
                 "token_endpoint": ISSUER + "/oauth/token", "jwks_uri": ISSUER + "/jwks",
                 "revocation_endpoint": ISSUER + "/oauth/revoke",
                 "id_token_signing_alg_values_supported": ["RS256"]})
         if url == ISSUER + "/jwks":
-            return httpx.Response(200, json=KeySet([SIGNING_KEY]).as_dict(private=False))
+            return httpx2.Response(200, json=KeySet([SIGNING_KEY]).as_dict(private=False))
         form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
         if url == ISSUER + "/oauth/token":
             self.token_calls.append(form)
@@ -167,11 +167,11 @@ class FakeOpenAI:
         if form["grant_type"] == "authorization_code":
             client_id, nonce, scope, sub = self.codes[form["code"]]
             assert form["client_id"] == client_id
-            return httpx.Response(200, json={
+            return httpx2.Response(200, json={
                 "access_token": "new-access", "refresh_token": "new-refresh", "token_type": "Bearer",
                 "expires_in": 3600, "scope": scope, "id_token": id_token(client_id, sub, nonce)})
         self.rotation += 1
-        return httpx.Response(200, json={
+        return httpx2.Response(200, json={
             "access_token": f"refreshed-{self.rotation}", "refresh_token": f"rotated-{self.rotation}",
             "token_type": "Bearer", "expires_in": 3600})
 

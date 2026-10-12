@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import anyio
 import click
-import httpx
+import httpx2
 import uvicorn
 
 from .auth import ChatGPTAuth, SignInError
@@ -48,22 +48,22 @@ def make_settings(ctx, **overrides):
 
 def configure_logging(level):
     logging.basicConfig(level=level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    # httpx logs every outbound request at INFO; keep that for --log-level debug.
-    logging.getLogger("httpx").setLevel(logging.DEBUG if level == "debug" else logging.WARNING)
+    # httpx2 logs every outbound request at INFO; keep that for --log-level debug.
+    logging.getLogger("httpx2").setLevel(logging.DEBUG if level == "debug" else logging.WARNING)
     # Their debug output includes request headers and token responses.
     for name in ("authlib", "httpcore"):
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def running_proxy(settings, api_key):
-    """An httpx client for a proxy already serving this data directory, or None.
+    """An httpx2 client for a proxy already serving this data directory, or None.
 
     The key is sent only after the server proves it knows it, so another program on the port never sees it.
     """
     from .server import healthz_proof
 
     challenge = secrets.token_hex(16)
-    client = httpx.Client(base_url=settings.origin, trust_env=False, timeout=10)
+    client = httpx2.Client(base_url=settings.origin, trust_env=False, timeout=10)
     try:
         response = client.get("/healthz", params={"challenge": challenge})
         proof = response.json().get("proof") if response.status_code == 200 else None
@@ -72,7 +72,7 @@ def running_proxy(settings, api_key):
             response = client.get("/auth/status")
             if response.status_code == 200:
                 return client
-    except (httpx.HTTPError, ValueError, AttributeError):
+    except (httpx2.HTTPError, ValueError, AttributeError):
         pass
     client.close()
     return None
@@ -226,7 +226,7 @@ def remote_login(settings, consent, port):
         url = anyio.run(lambda: auth.pasted_sign_in_url(session, consent))
     except CredentialFileError as error:
         fail(error)
-    except (httpx.HTTPError, ValueError) as error:
+    except (httpx2.HTTPError, ValueError) as error:
         raise click.ClickException(f"Could not reach OpenAI to start sign-in ({type(error).__name__}).") from None
     click.echo(f"Open this link in a browser on any computer and sign in:\n\n{click.style(url, fg='cyan', bold=True)}\n\n"
                f"The browser then goes to {settings.redirect_uri}?code=... and fails to load it. That is expected:\n"

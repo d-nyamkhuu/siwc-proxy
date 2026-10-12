@@ -3,7 +3,7 @@
 import json
 import re
 
-from httpx_sse import EventSource, SSEError
+from httpx2 import EventSource, SSEError
 
 from .errors import protocol_error
 
@@ -11,7 +11,8 @@ from .errors import protocol_error
 async def response_events(response):
     """Responses events from an upstream SSE body; events without data (keep-alives) are skipped."""
     try:
-        async for sse in EventSource(response).aiter_sse():
+        # No event size cap: terminal events repeat the whole answer, which may exceed httpx2's 1 MiB default.
+        async for sse in EventSource(response, max_event_size=None):
             if not sse.data:
                 continue
             try:

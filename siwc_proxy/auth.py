@@ -11,7 +11,7 @@ import secrets
 import time
 
 import anyio
-import httpx
+import httpx2
 from authlib.integrations.base_client import OAuthError
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 from authlib.integrations.starlette_client import OAuth
@@ -182,7 +182,7 @@ class ChatGPTAuth:
         except (JoseError, ValueError, KeyError, TypeError) as error:
             log.warning("Sign-in failed: invalid ID token (%s)", type(error).__name__)
             raise SignInError("OpenAI returned an identity token that could not be verified.") from None
-        except httpx.HTTPError as error:
+        except httpx2.HTTPError as error:
             log.warning("Sign-in failed: %s", type(error).__name__)
             raise SignInError("Could not reach OpenAI to finish sign-in. Start again.") from None
         claims = token.pop("userinfo", None)
@@ -262,9 +262,9 @@ class ChatGPTAuth:
         account = record.account
         try:
             metadata = await self.server_metadata()
-        except (httpx.HTTPError, ValueError) as error:
+        except (httpx2.HTTPError, ValueError) as error:
             log.warning("Refresh failed: discovery %s", type(error).__name__)
-            raise refresh_failed(isinstance(error, httpx.TimeoutException)) from None
+            raise refresh_failed(isinstance(error, httpx2.TimeoutException)) from None
         previous_scope, issued = account.scope, {}
 
         async def persist(token, refresh_token=None, access_token=None):
@@ -293,9 +293,9 @@ class ChatGPTAuth:
                                   "in again.", status=502, code="chatgpt_client_rejected") from None
             log.warning("Refresh failed: %s", error.error)
             raise refresh_failed() from None
-        except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
+        except (httpx2.HTTPError, ValueError, KeyError, TypeError) as error:
             log.warning("Refresh failed: %s", type(error).__name__)
-            raise refresh_failed(isinstance(error, httpx.TimeoutException)) from None
+            raise refresh_failed(isinstance(error, httpx2.TimeoutException)) from None
         log.info("Refreshed the ChatGPT access token.")
         if issued.get("id_token"):
             await self._check_identity(record, issued)
@@ -305,7 +305,7 @@ class ChatGPTAuth:
         try:
             claims = await self.remote(account.client_id).parse_id_token(
                 token, nonce=None, claims_options=self.claims_options(account.client_id), leeway=LEEWAY)
-        except (JoseError, ValueError, KeyError, TypeError, httpx.HTTPError) as error:
+        except (JoseError, ValueError, KeyError, TypeError, httpx2.HTTPError) as error:
             log.warning("Could not verify the refreshed ID token (%s); keeping tokens.", type(error).__name__)
             return
         if account.subject and claims["sub"] != account.subject:
@@ -351,7 +351,7 @@ class ChatGPTAuth:
                 if response.status_code < 500:
                     log.warning("OpenAI rejected token revocation (HTTP %s).", response.status_code)
                     return False
-            except httpx.TransportError as error:
+            except httpx2.TransportError as error:
                 log.warning("Revocation attempt %s failed: %s", attempt, type(error).__name__)
             if attempt < attempts:
                 await anyio.sleep(backoff(attempt))
