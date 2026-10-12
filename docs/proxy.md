@@ -67,11 +67,33 @@ Ways to start a sign-in:
    and waits. No restart is needed.
 3. `siwc-proxy login` with no proxy running serves the callback on a free
    loopback port (`--port` to pick one) and exits when done.
+4. `siwc-proxy login --remote` for a machine you reach over SSH, or any
+   machine without a browser. See below.
 
 Sign-in links point at the proxy itself (`/auth/start/...`), not at OpenAI.
 Each link works for 15 minutes or until a sign-in completes, whichever comes
 first. Opening it redirects to OpenAI with a fresh, single-use OAuth state.
 Open them in a browser on the same machine, because the callback must reach `127.0.0.1`.
+
+### Signing in on a remote machine
+
+`siwc-proxy login --remote` prints OpenAI's sign-in link directly. Open it in a
+browser on any computer and sign in. OpenAI then sends that browser to
+`http://127.0.0.1:<port>/auth/callback?code=...&state=...`. Nothing listens
+there, so the page fails to load. Copy the full address from the address bar
+and paste it at the `Address:` prompt. The command exchanges the code and saves
+the credentials, and a proxy already running against the same data directory
+picks them up without a restart.
+
+- The pasted code works only for this `login` process: the PKCE verifier and
+  OAuth state never leave it. Paste within 15 minutes.
+- The callback port is random unless you pass `--port`. Any port works because
+  the browser never actually connects to it.
+- `--consent` works the same way as in the other sign-in flows.
+- As an alternative, forward the proxy's port over SSH
+  (`ssh -L 8787:127.0.0.1:8787 server`) and open the normal sign-in link from
+  `serve`, or from `login --port 8787` when no proxy is running. The browser
+  then reaches the remote callback through the tunnel.
 
 ### Token lifecycle
 

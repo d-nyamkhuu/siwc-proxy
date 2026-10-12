@@ -9,13 +9,14 @@ import time
 import webbrowser
 from contextlib import closing
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import anyio
 import click
 import httpx
 import uvicorn
 
-from .auth import ChatGPTAuth
+from .auth import ChatGPTAuth, SignInError
 from .config import Settings
 from .constants import USAGE_URL
 from .errors import OpenAIError
@@ -122,11 +123,15 @@ def serve(ctx, **options):
               help="Port for the sign-in callback when no proxy is running (default: any free port).")
 @click.option("--timeout", type=click.FloatRange(min=1, max=3600), default=300, show_default=True)
 @click.option("--browser/--no-browser", default=True, help="Open the sign-in link in a browser.")
+@click.option("--remote", is_flag=True, help="Sign in with a browser on another computer: open the link there, "
+              "then paste back the address the browser ends up on.")
 @click.pass_context
-def login(ctx, consent, port, timeout, browser):
+def login(ctx, consent, port, timeout, browser, remote):
     """Sign in through the browser (via the running proxy if there is one)."""
     settings = make_settings(ctx)
     configure_logging("warning")
+    if remote:
+        return remote_login(settings, consent, port)
     api_key = settings.resolve_api_key()
     client = running_proxy(settings, api_key)
     if client is not None:
@@ -182,6 +187,43 @@ def login(ctx, consent, port, timeout, browser):
     if outcome.get("timed_out", True):
         raise click.ClickException("Sign-in did not complete.")
     report(ChatGPTAuth(settings, Store(settings.data_dir)).status())
+
+
+def pasted_query(text):
+    """The query of a pasted callback address (or of just its `?code=...&state=...` part)."""
+    text = text.strip()
+    query = urlsplit(text).query if "://" in text else text.partition("?")[2] or text
+    params = parse_qs(query)
+    if "state" not in params or not ("code" in params or "error" in params):
+        raise click.BadParameter("Paste the whole address from the browser's address bar; "
+                                 "it starts with http://127.0.0.1 and contains code= and state=.")
+    return query
+
+
+def remote_login(settings, consent, port):
+    """Sign in with the browser elsewhere. OpenAI sends it to a 127.0.0.1 callback that cannot load there,
+    and the address it was sent to (code and state) is pasted here; PKCE keeps the code useless anywhere else."""
+    # The registered redirect URI accepts any loopback port; a random one is unlikely to reach a real service.
+    settings.port = port or 49152 + secrets.randbelow(16384)
+    auth = ChatGPTAuth(settings, Store(settings.data_dir))
+    session = {}
+    try:
+        url = anyio.run(lambda: auth.pasted_sign_in_url(session, consent))
+    except CredentialFileError as error:
+        fail(error)
+    except (httpx.HTTPError, ValueError) as error:
+        raise click.ClickException(f"Could not reach OpenAI to start sign-in ({type(error).__name__}).") from None
+    click.echo(f"Open this link in a browser on any computer and sign in:\n\n{click.style(url, fg='cyan', bold=True)}\n\n"
+               f"The browser then goes to {settings.redirect_uri}?code=... and fails to load it. That is expected:\n"
+               "copy the full address from its address bar and paste it below within 15 minutes.", err=True)
+    query = click.prompt("Address", err=True, value_proc=pasted_query)
+    try:
+        anyio.run(lambda: auth.complete_sign_in(auth.pasted_request(session, query)))
+    except SignInError as error:
+        raise click.ClickException(str(error)) from None
+    except CredentialFileError as error:
+        fail(error)
+    report(auth.status())
 
 
 def report(status):

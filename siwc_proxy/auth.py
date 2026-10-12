@@ -17,6 +17,7 @@ from authlib.integrations.httpx_client import AsyncOAuth2Client
 from authlib.integrations.starlette_client import OAuth
 from authlib.oauth2.rfc6749 import OAuth2Token
 from joserfc.errors import JoseError
+from starlette.requests import Request
 
 from .constants import (AGENT_NAME, DYNAMIC_CLIENT, ISSUER, LEEWAY, METADATA_URL, RESOURCE, SCOPES,
                         TERMINAL_REFRESH_ERRORS)
@@ -205,6 +206,19 @@ class ChatGPTAuth:
         if self.signed_in is not None:
             self.signed_in.set()
         return current
+
+    # Pasted sign-in: the browser runs on another computer, so its callback address is pasted back by hand.
+
+    @staticmethod
+    def pasted_request(session, query=""):
+        """A stand-in for the browser's request; `session` plays the cookie that binds the OAuth state."""
+        return Request({"type": "http", "method": "GET", "headers": [], "query_string": query.encode(),
+                        "session": session})
+
+    async def pasted_sign_in_url(self, session, consent=False):
+        """OpenAI's authorize URL, with the state kept in `session` for `complete_sign_in`."""
+        response = await self.authorize_redirect(self.pasted_request(session), consent=consent)
+        return response.headers["location"]
 
     # Tokens
 

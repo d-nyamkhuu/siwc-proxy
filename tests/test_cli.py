@@ -1,16 +1,20 @@
 """The siwc-proxy command line."""
 
+import io
 import json
 import socket
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 
+import click
 import httpx
+import pytest
 from click.testing import CliRunner
 from fastapi.responses import JSONResponse
 
 from siwc_proxy import cli, server
+from siwc_proxy.auth import ChatGPTAuth
 from siwc_proxy.config import Settings
 from support import KEY, FakeOpenAI, live_server, saved, write_credentials
 
@@ -135,3 +139,88 @@ def test_login_through_a_running_proxy(directory, fake, monkeypatch):
                                     env={"SIWC_PROXY_PORT": str(port), "SIWC_PROXY_API_KEY": KEY})
     assert result.exit_code == 0, result.output
     assert opened[0].startswith(f"http://127.0.0.1:{port}/auth/start/") and "Signed in as" in result.output
+
+
+class Paste(io.RawIOBase):
+    """Terminal input typed only once the prompt is reached, so it can depend on the printed link."""
+
+    def __init__(self, make):
+        self.make, self.data = make, None
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        if not len(buffer):
+            return 0
+        if self.data is None:
+            self.data = self.make().encode()
+        count = min(len(buffer), len(self.data))
+        buffer[:count], self.data = self.data[:count], self.data[count:]
+        return count
+
+
+def remote_login(folder, monkeypatch, answer, *args):
+    """Run `login --remote`; `answer(params)` gets the authorize URL's query and returns what is pasted."""
+    fake = FakeOpenAI()
+    links = []
+
+    class Auth(ChatGPTAuth):
+        def __init__(self, settings, store):
+            super().__init__(settings, store, transport=fake.transport)
+
+        async def pasted_sign_in_url(self, session, consent=False):
+            links.append(await super().pasted_sign_in_url(session, consent))
+            return links[-1]
+
+    monkeypatch.setattr(cli, "ChatGPTAuth", Auth)
+    monkeypatch.setattr(cli, "running_proxy", lambda *a: pytest.fail("--remote must not use a running proxy"))
+
+    def typed():
+        params = {k: v[0] for k, v in parse_qs(urlsplit(links[0]).query).items()}
+        return answer(fake, params)
+
+    result = CliRunner().invoke(cli.main, ["--data-dir", str(folder), "login", "--remote", *args],
+                                input=Paste(typed))
+    return result, links, fake
+
+
+def test_remote_login_with_a_pasted_address(tmp_path, monkeypatch):
+    def answer(fake, params):
+        fake.codes["c"] = ("oaiapp_remote", params["nonce"], "openid chatgpt.tokens.use.direct", "sub-1")
+        return ("not the address\n"
+                f"  {params['redirect_uri']}?code=c&state={params['state']}&client_id=oaiapp_remote  \n")
+
+    folder = tmp_path / "remote"
+    result, links, fake = remote_login(folder, monkeypatch, answer, "--port", "40123")
+    assert result.exit_code == 0, result.output
+    assert links[0].startswith("https://auth.openai.com/oauth/authorize?") and links[0] in result.output
+    assert "redirect_uri=http%3A%2F%2F127.0.0.1%3A40123%2Fauth%2Fcallback" in links[0]
+    assert "contains code= and state=" in result.output  # the first paste was rejected and asked again
+    assert "Signed in as user@example.com" in result.output
+    assert fake.token_calls[-1]["code_verifier"]
+    assert saved(folder)["account"]["client_id"] == "oaiapp_remote"
+
+
+def test_remote_login_reports_a_cancelled_sign_in(tmp_path, monkeypatch):
+    result, *_ = remote_login(tmp_path, monkeypatch, lambda fake, params: (
+        f"error=access_denied&state={params['state']}\n"))
+    assert result.exit_code == 1 and "Sign-in was cancelled." in result.output
+    assert not (tmp_path / "credentials.json").exists() or "account" not in saved(tmp_path)
+
+
+def test_remote_login_rejects_a_forged_state(tmp_path, monkeypatch):
+    result, *_ = remote_login(tmp_path, monkeypatch, lambda fake, params: "?code=c&state=forged\n")
+    assert result.exit_code == 1 and "invalid, expired" in result.output
+
+
+@pytest.mark.parametrize("text", ["http://127.0.0.1:5/auth/callback?code=c&state=s", "?code=c&state=s",
+                                  "code=c&state=s", "127.0.0.1:5/auth/callback?code=c&state=s"])
+def test_pasted_query_accepts_an_address_or_its_query(text):
+    assert cli.pasted_query(text) == "code=c&state=s"
+
+
+@pytest.mark.parametrize("text", ["", "http://127.0.0.1:5/auth/callback", "code=c", "state=s"])
+def test_pasted_query_rejects_other_text(text):
+    with pytest.raises(click.BadParameter):
+        cli.pasted_query(text)
