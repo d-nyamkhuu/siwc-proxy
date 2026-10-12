@@ -27,19 +27,24 @@ def system_to_developer(item):
     return item
 
 
-def cache_session(body, secret):
-    """Remove `prompt_cache_key` from an upstream body and return the `session_id` header to send instead.
+def cache_session(body, secret, supplied=None):
+    """Return the `session-id` header for an upstream body and set its `prompt_cache_key` to the same value.
 
-    ChatGPT sign-in keys its prompt cache on the `session_id` header and replaces `prompt_cache_key` with a
-    random value, so without a session every turn of a conversation misses the cache. A caller's own key is
-    used when given; otherwise the session comes from the model, instructions and first input item, which stay
-    the same as a conversation grows. Values are keyed hashes so conversation text never leaves as an ID.
+    ChatGPT sign-in derives prompt cache affinity from the `session-id` header and sets the prompt cache key
+    from it, so without a session every turn of a conversation misses the cache. Like Codex, the body carries
+    the same value as `prompt_cache_key`, the API's official field, in case upstream starts honoring it.
+    A caller's own `session-id` is used as is, and a caller's own key names the session; otherwise the session
+    comes from the model, instructions and first input item, which stay the same as a conversation grows.
+    Derived values are keyed hashes so conversation text never leaves as an ID.
     """
-    key = body.pop("prompt_cache_key", None)
-    if not isinstance(key, str) or not key:
-        first = body["input"][0] if isinstance(body.get("input"), list) and body["input"] else None
-        key = json.dumps([body.get("model"), body.get("instructions"), first], sort_keys=True)
-    return hmac.new(secret, key.encode(), hashlib.sha256).hexdigest()[:32]
+    if not supplied:
+        key = body.get("prompt_cache_key")
+        if not isinstance(key, str) or not key:
+            first = body["input"][0] if isinstance(body.get("input"), list) and body["input"] else None
+            key = json.dumps([body.get("model"), body.get("instructions"), first], sort_keys=True)
+        supplied = hmac.new(secret, key.encode(), hashlib.sha256).hexdigest()[:32]
+    body["prompt_cache_key"] = supplied
+    return supplied
 
 
 def normalize(body, *, strict=False):

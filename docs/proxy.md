@@ -224,34 +224,56 @@ These are always rejected: `n > 1`, `logprobs`, audio, and legacy
 
 Neither API keeps conversation state here: every Chat or Responses call is a new
 upstream request that carries the whole history. To keep long chats fast, turns
-need to reuse the prompt cache. ChatGPT sign-in keys that cache on a `session_id`
-request header and replaces any `prompt_cache_key` with a random value per
-request, so without a session no turn ever hits the cache.
+need to reuse the prompt cache. ChatGPT sign-in derives cache affinity from the
+`session-id` request header (as Codex sends it) and sets the prompt cache key
+from it, replacing any `prompt_cache_key` in the body. Without a session no turn
+ever hits the cache.
 
-The proxy sends a `session_id` on every inference request:
+The proxy sends a `session-id` on every inference request, and, like Codex, the
+same value as the body's `prompt_cache_key` (the API's official field, in case
+upstream starts honoring it):
 
-- The caller's own `session_id` header, if there is one, is forwarded as is.
+- The caller's own `session-id` header, if there is one, is used as is.
 - Otherwise, a `prompt_cache_key` from the body (Chat or Responses) names the
-  session; it is removed from the body, since upstream ignores it there.
+  session.
 - Otherwise, the session is derived from the model, `instructions` and the
   first input item (usually the system prompt). These stay the same as a
   conversation grows, so every turn lands in one session, and editing a later
   message keeps the cached prefix up to the edit. Conversations that start the
   same way share a session, which also shares the cache for that opening.
 
-Session values are HMACs under a key made at startup, so conversation text is
-never sent as an ID; a proxy restart starts new sessions. Usage reports hits in
-`prompt_tokens_details.cached_tokens` (Chat) or
-`input_tokens_details.cached_tokens` (Responses). Caching is best effort: in
-live tests, cached tokens grew with the history to about 80% of the prompt,
-but an occasional turn missed.
+Derived session values are HMACs under a key made at startup, so conversation
+text is never sent as an ID; a proxy restart starts new sessions. Usage reports
+hits in `prompt_tokens_details.cached_tokens` (Chat) or
+`input_tokens_details.cached_tokens` (Responses).
+
+**Caching is best effort, and cached tokens can go down.** The cache lives on
+several upstream machines, each holding only the prompts it served, and a
+session steers requests towards them without pinning a conversation to one. So
+each turn gets whatever the machine it lands on has:
+
+- the previous turn's prompt, rounded down to a multiple of 128 tokens, when it
+  lands where the last turn ran;
+- an earlier, shorter prefix when it lands on a machine that served an older turn,
+  so `cached` drops below the turn before;
+- nothing (`cached=0`) on a machine that has not seen the conversation, which is
+  common for the second and third turns.
+
+Prompts under 1024 tokens are never cached, so short side requests such as title
+generation always show `cached=0`. In live tests with 12-turn conversations of 4–8k
+tokens, 56–92% of input tokens after the first turn were cached, with 0–4 turns
+missing entirely. Sending Codex's other headers (`thread-id`, `x-client-request-id`)
+or replaying the `x-codex-turn-state` response header did not change this, and
+explicit `prompt_cache_breakpoint`s are rejected. What a client can control is the
+prefix: keep the system prompt (no timestamps), tools and their order,
+`reasoning_effort` and `response_format` identical between turns, and only append
+new messages.
 
 The access log shows each inference request's token counts and cache hit rate,
-the cached share of its input tokens, plus `cache_overall`, the rate across all
-requests since the proxy started:
+the cached share of its input tokens:
 
 ```text
-POST /v1/chat/completions 200 model=gpt-6.1-sol request_id=req_… 4834ms input=3611 cached=3456 (96%) output=11 cache_overall=48%
+POST /v1/chat/completions 200 model=gpt-6.1-sol request_id=req_… 4834ms input=3611 cached=3456 (96%) output=11
 ```
 
 ## Errors

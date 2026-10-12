@@ -180,7 +180,7 @@ def test_responses_drop_rejected_params_and_system_items(directory, fake):
         assert sent["input"][0] == {**system, "role": "developer"}
         assert sent["input"][1] == {"role": "system", "content": "x"}  # accepted as is
         assert "max_output_tokens" in sent and "temperature" not in sent
-        assert "prompt_cache_key" not in sent  # Replaced upstream; the session_id header carries it instead.
+        assert sent["prompt_cache_key"] == fake.calls[-1].headers["session-id"] != "k"  # Hashed into the session.
     with running(directory, fake, strict=True) as (client, *_):
         response = client.post("/v1/responses", json=body)
         assert response.status_code == 400 and response.json()["error"]["param"] == "temperature"
@@ -194,9 +194,11 @@ def test_turns_of_a_conversation_share_a_cache_session(directory, fake):
     edited = [system, {"role": "user", "content": "Edited"}] + turn2[2:]
     other = [{"role": "system", "content": "Different prompt"}, {"role": "user", "content": "Hi"}]
     with running(directory, fake) as (client, fake, _):
-        def session(path, body, **headers):
+        def session(path, body, headers=None):
             client.post(path, json=body, headers=headers)
-            return fake.calls[-1].headers["session_id"]
+            sent = fake.calls[-1]
+            assert json.loads(sent.content)["prompt_cache_key"] == sent.headers["session-id"]
+            return sent.headers["session-id"]
 
         chat = [session("/v1/chat/completions", {"model": "m", "messages": m}) for m in (turn1, turn2, edited, other)]
         assert chat[0] == chat[1] == chat[2] != chat[3]  # Edits after the first item keep the session.
@@ -208,10 +210,9 @@ def test_turns_of_a_conversation_share_a_cache_session(directory, fake):
         keyed = [session("/v1/chat/completions", {"model": "m", "messages": m, "prompt_cache_key": "conv-1"})
                  for m in (turn1, other)]
         assert keyed[0] == keyed[1] != chat[0]
-        assert "prompt_cache_key" not in json.loads(fake.calls[-1].content)
-        assert session("/v1/responses", {"model": "m", "input": turn1}, session_id="mine") == "mine"
+        assert session("/v1/responses", {"model": "m", "input": turn1}, {"session-id": "mine"}) == "mine"
         client.get("/v1/models")
-        assert "session_id" not in fake.calls[-1].headers
+        assert "session-id" not in fake.calls[-1].headers
 
 
 def test_multiline_sse_comments_crlf_and_bom(directory, fake):
@@ -238,7 +239,7 @@ def test_responses_normalized_and_aggregated(directory, fake):
         assert response.headers["x-siwc-ignored-params"] == "store"
         sent = json.loads(fake.calls[-1].content)
         assert sent == {"model": "test-model", "input": [{"role": "user", "content": "Hi"}],
-                        "store": False, "stream": True}
+                        "store": False, "stream": True, "prompt_cache_key": fake.calls[-1].headers["session-id"]}
         assert fake.calls[-1].url.query == b""  # only the models catalog takes query parameters
         assert fake.calls[-1].headers["openai-beta"] == "test=v1"
 
@@ -586,8 +587,8 @@ def test_access_log_reports_prompt_cache_hits(directory, fake, caplog, path, bod
         fake.api = streamed(text_events()[:-1])  # no terminal response, so no usage
         client.post(path, json=body)
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("POST /v1/")]
-    assert lines[0].endswith(" input=10 cached=2 (20%) output=4 cache_overall=20%")
-    assert lines[1].endswith(" input=10 cached=8 (80%) output=4 cache_overall=50%")
+    assert lines[0].endswith(" input=10 cached=2 (20%) output=4")
+    assert lines[1].endswith(" input=10 cached=8 (80%) output=4")
     assert "cached=" not in lines[2]
 
 

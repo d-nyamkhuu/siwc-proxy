@@ -54,12 +54,20 @@ def printable(text, limit=200):
     return "".join(c if c.isprintable() else "?" for c in text[:limit])
 
 
+def usage(counts):
+    """Token counts and the prompt cache hit rate (cached share of input tokens) for the access log."""
+    if not counts:
+        return ""
+    input_tokens, cached, output = counts
+    rate = f" ({cached / input_tokens:.0%})" if input_tokens else ""
+    return f" input={input_tokens} cached={cached}{rate} output={output}"
+
+
 class Boundary:
     """Host and bearer-key checks before any body is read, no-store responses, and access logs."""
 
     def __init__(self, app, settings, api_key):
         self.app, self.settings, self.key = app, settings, api_key.encode()
-        self.input_tokens = self.cached_tokens = 0  # Since startup, for the overall prompt cache hit rate.
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -96,18 +104,7 @@ class Boundary:
             log.info("%s %s %s%s%s %.0fms%s", scope["method"], path, seen.get("status", "-"),
                      f" model={printable(model)}" if isinstance(model, str) else "",
                      f" request_id={printable(seen['request_id'])}" if seen.get("request_id") else "",
-                     (time.perf_counter() - started) * 1000, self.usage(scope.get("state", {}).get("usage")))
-
-    def usage(self, counts):
-        """Token counts and prompt cache hit rates (cached share of input tokens) for the access log."""
-        if not counts:
-            return ""
-        input_tokens, cached, output = counts
-        self.input_tokens += input_tokens
-        self.cached_tokens += cached
-        rate = f" ({cached / input_tokens:.0%})" if input_tokens else ""
-        overall = f" cache_overall={self.cached_tokens / self.input_tokens:.0%}" if self.input_tokens else ""
-        return f" input={input_tokens} cached={cached}{rate} output={output}{overall}"
+                     (time.perf_counter() - started) * 1000, usage(scope.get("state", {}).get("usage")))
 
 
 class Relayed(Exception):
@@ -268,9 +265,9 @@ def create_app(settings=None, *, transport=None, api_key=None):
         headers["Accept-Encoding"] = "identity"
         content = None
         if body is not None:
-            session = responses_api.cache_session(body, session_secret)
+            session = responses_api.cache_session(body, session_secret, request.headers.get("session-id"))
             headers.update({"Content-Type": "application/json", "Accept": "text/event-stream",
-                            "session_id": request.headers.get("session_id") or session})
+                            "session-id": session})
             content = json.dumps(body).encode()
         token, refreshed, attempt = await auth.access_token(), False, 0
         while True:
