@@ -282,6 +282,10 @@ def create_app(settings=None, *, transport=None, api_key=None):
                     await anyio.sleep(retry_delay(response, attempt))
                     continue
                 return response
+            if body is not None and response.is_success and "content-type" not in response.headers:
+                # The ChatGPT backend can stream Responses events without a Content-Type; SSE decoders and
+                # clients of the relayed stream need one.
+                response.headers["Content-Type"] = "text/event-stream"
             app.state.active.add(response)
             return response
 

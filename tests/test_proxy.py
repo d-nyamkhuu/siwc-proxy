@@ -334,6 +334,19 @@ def test_responses_stream_is_relayed_unchanged(directory, fake):
         assert stream.closed
 
 
+@pytest.mark.parametrize("path,body", [("/v1/chat/completions", BODY), ("/v1/chat/completions", {**BODY, "stream": True}),
+                                       ("/v1/responses", {"model": "m", "input": "Hi"}),
+                                       ("/v1/responses", {"model": "m", "input": "Hi", "stream": True})])
+def test_stream_without_content_type(directory, fake, path, body):
+    fake.api = lambda r: httpx2.Response(200, stream=Chunks(sse(text_events())))
+    with running(directory, fake) as (client, *_):
+        response = client.post(path, json=body)
+        assert response.status_code == 200
+        assert "error" not in response.text
+        if body.get("stream"):
+            assert response.headers["content-type"].startswith("text/event-stream")
+
+
 @pytest.mark.parametrize("body,param", [({"model": "m", "input": "x", "previous_response_id": "r"}, "previous_response_id"),
                                         ({"model": "m", "input": "x", "background": True}, "background"),
                                         ({"model": "m", "input": "x", "stream": "yes"}, "stream")])
