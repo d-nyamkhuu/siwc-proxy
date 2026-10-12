@@ -191,7 +191,9 @@ def create_app(settings=None, *, transport=None, api_key=None):
         app.state.active = set()
         auth.serving, auth.signed_in = True, anyio.Event()
         timeout = httpx.Timeout(30, read=settings.read_timeout)
-        async with httpx.AsyncClient(transport=transport, trust_env=False, follow_redirects=False,
+        # The transport retries connection failures, before any request is sent.
+        upstream_transport = transport or httpx.AsyncHTTPTransport(retries=MAX_RETRIES)
+        async with httpx.AsyncClient(transport=upstream_transport, trust_env=False, follow_redirects=False,
                                      timeout=timeout) as client:
             app.state.upstream = client
             try:
@@ -245,7 +247,7 @@ def create_app(settings=None, *, transport=None, api_key=None):
             app.state.active.discard(response)
 
     async def send(request, method, path, body=None, *, query=None):
-        """Open an upstream stream; refresh once on 401 and retry admission-time 503s and connect errors.
+        """Open an upstream stream; refresh once on 401 and retry admission-time 503s.
 
         Nothing is retried once the response body is being relayed.
         """
@@ -264,15 +266,7 @@ def create_app(settings=None, *, transport=None, api_key=None):
                                             content=content)
             # Preserve repeated query parameters and their original percent-encoding.
             upstream.url = upstream.url.copy_with(query=query or None)
-            try:
-                response = await client.send(upstream, stream=True)
-            except (httpx.ConnectError, httpx.ConnectTimeout) as error:
-                if attempt >= MAX_RETRIES:
-                    raise
-                attempt += 1
-                log.info("Retrying after %s", type(error).__name__)
-                await anyio.sleep(backoff(attempt))
-                continue
+            response = await client.send(upstream, stream=True)
             if response.status_code == 401 and not refreshed:
                 # Admission rejected the token, so no inference ran: refresh and resend once.
                 await response.aclose()

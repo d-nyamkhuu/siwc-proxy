@@ -13,6 +13,7 @@ dependencies = [
     "fastapi>=0.115",
     "filelock>=3.16",
     "httpx>=0.28,<0.29",
+    "httpx-sse>=0.4.3",
     "itsdangerous>=2.2",
     "joserfc>=1.6",
     "platformdirs>=4.3",

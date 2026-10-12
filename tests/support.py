@@ -61,6 +61,9 @@ def tool_events():
     ]
 
 
+SSE_TYPE = {"content-type": "text/event-stream"}
+
+
 def sse(events):
     return "".join("event: " + e["type"] + "\ndata: " + json.dumps(e, ensure_ascii=False) + "\n\n"
                    for e in events).encode()
@@ -200,6 +203,6 @@ def live_server(app, sock):
         assert not thread.is_alive()
 
 
-__all__ = ["BASE", "BODY", "Chunks", "DIRECT_SCOPE", "FakeOpenAI", "HEADERS", "KEY", "TEXT_ITEM", "id_token",
+__all__ = ["BASE", "BODY", "Chunks", "DIRECT_SCOPE", "FakeOpenAI", "HEADERS", "KEY", "SSE_TYPE", "TEXT_ITEM", "id_token",
            "live_server", "parse_chunks", "running", "saved", "sse", "terminal", "text_events", "tool_events",
            "write_credentials"]

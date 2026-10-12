@@ -7,7 +7,7 @@ from openai import AsyncOpenAI, OpenAI
 
 from siwc_proxy.config import Settings
 from siwc_proxy.server import create_app
-from support import BASE, BODY, KEY, Chunks, running, sse, terminal, text_events, tool_events
+from support import BASE, BODY, KEY, SSE_TYPE, Chunks, running, sse, terminal, text_events, tool_events
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ def realistic_events():
 
 def test_responses_streaming_and_helper(sdk):
     sdk, fake = sdk
-    fake.api = lambda r: httpx.Response(200, stream=Chunks(sse(realistic_events())))
+    fake.api = lambda r: httpx.Response(200, headers=SSE_TYPE, stream=Chunks(sse(realistic_events())))
     events = list(sdk.responses.create(model="test-model", input="hi", stream=True))
     assert events[-1].type == "response.completed"
     with sdk.responses.stream(model="test-model", input="hi") as stream:
@@ -61,7 +61,7 @@ def test_chat_with_framework_defaults(sdk):
 
 def test_chat_stream_helper_accumulates_tool_arguments(sdk):
     sdk, fake = sdk
-    fake.api = lambda r: httpx.Response(200, stream=Chunks(sse(tool_events())))
+    fake.api = lambda r: httpx.Response(200, headers=SSE_TYPE, stream=Chunks(sse(tool_events())))
     with sdk.chat.completions.stream(**BODY) as stream:
         list(stream)
         message = stream.get_final_completion().choices[0].message
@@ -72,7 +72,7 @@ def test_chat_stream_helper_accumulates_tool_arguments(sdk):
 @pytest.mark.parametrize("endpoint", ["chat", "responses"])
 def test_plan_limit_is_a_rate_limit_error(sdk, endpoint):
     sdk, fake = sdk
-    fake.api = lambda r: httpx.Response(200, stream=Chunks(sse([{"type": "response.failed", "response": terminal(
+    fake.api = lambda r: httpx.Response(200, headers=SSE_TYPE, stream=Chunks(sse([{"type": "response.failed", "response": terminal(
         status="failed", error={"message": "Limit", "code": "subscription_sharing_usage_limit_exceeded"})}])))
     with pytest.raises(openai.RateLimitError) as caught:
         if endpoint == "chat":
@@ -121,7 +121,7 @@ def test_async_sdk(directory, fake):
                                    http_client=httpx.AsyncClient(transport=httpx.ASGITransport(app))) as sdk:
                 response = await sdk.responses.create(model="test-model", input="hi")
                 assert response.output_text == "Hi 世界"
-                fake.api = lambda r: httpx.Response(200, stream=Chunks(sse(text_events())))
+                fake.api = lambda r: httpx.Response(200, headers=SSE_TYPE, stream=Chunks(sse(text_events())))
                 stream = await sdk.chat.completions.create(**BODY, stream=True)
                 text = "".join([c.choices[0].delta.content or "" async for c in stream if c.choices])
                 assert text == "Hi 世界"

@@ -1,59 +1,27 @@
-"""Incremental Server-Sent Events decoding for Responses streams."""
+"""Server-Sent Events decoding and relaying for Responses streams."""
 
-import codecs
 import json
 import re
+
+from httpx_sse import EventSource, SSEError
 
 from .errors import protocol_error
 
 
 async def response_events(response):
-    """Incrementally decode SSE (UTF-8, CR/LF, comments, and multiline data)."""
-    decoder = codecs.getincrementaldecoder("utf-8")()
-    buffer, data = "", []
-    first = True
-
-    def line(value):
-        if value == "":
-            if not data:
-                return None
-            raw = "\n".join(data)
-            data.clear()
+    """Responses events from an upstream SSE body; events without data (keep-alives) are skipped."""
+    try:
+        async for sse in EventSource(response).aiter_sse():
+            if not sse.data:
+                continue
             try:
-                event = json.loads(raw)
+                event = sse.json()
             except (ValueError, RecursionError):
                 raise protocol_error() from None
             if not isinstance(event, dict) or not isinstance(event.get("type"), str):
                 raise protocol_error()
-            return event
-        field, sep, value = value.partition(":")
-        if field == "data":
-            data.append(value[1:] if value.startswith(" ") else value)
-        return None
-
-    try:
-        async for chunk in response.aiter_bytes():
-            text = decoder.decode(chunk)
-            if first and text:
-                text = text.removeprefix("\ufeff")
-                first = False
-            buffer += text
-            while match := re.search(r"\r\n|\r|\n", buffer):
-                if match.group() == "\r" and match.end() == len(buffer):
-                    break  # A CRLF pair may straddle network packets.
-                event = line(buffer[:match.start()])
-                buffer = buffer[match.end():]
-                if event is not None:
-                    yield event
-        buffer += decoder.decode(b"", final=True)
-        if buffer.endswith("\r"):
-            event = line(buffer[:-1])
-            if event is not None:
-                yield event
-            buffer = ""
-        if buffer or data:
-            raise protocol_error()
-    except UnicodeError:
+            yield event
+    except SSEError:
         raise protocol_error() from None
 
 

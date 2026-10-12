@@ -15,12 +15,12 @@ from siwc_proxy.config import Settings
 from siwc_proxy.server import create_app
 from siwc_proxy.server import healthz_proof
 from siwc_proxy.store import create_private, private_dir
-from support import (BASE, BODY, HEADERS, KEY, TEXT_ITEM, Chunks, assert_private, live_server, parse_chunks, running,
-                     sse, terminal, text_events, tool_events, write_credentials)
+from support import (BASE, BODY, HEADERS, KEY, SSE_TYPE, TEXT_ITEM, Chunks, assert_private, live_server, parse_chunks,
+                     running, sse, terminal, text_events, tool_events, write_credentials)
 
 
 def streamed(events, **headers):
-    return lambda request: httpx.Response(200, headers={"content-type": "text/event-stream", **headers},
+    return lambda request: httpx.Response(200, headers={**SSE_TYPE, **headers},
                                           stream=Chunks(sse(events)))
 
 
@@ -73,7 +73,7 @@ def test_lenient_chat_reports_ignored_params(directory, fake):
 @pytest.mark.parametrize("streaming", [False, True])
 def test_interleaved_tools_have_dense_indexes_and_no_duplicates(directory, fake, streaming):
     stream = Chunks(sse(tool_events()), size=1)
-    fake.api = lambda r: httpx.Response(200, stream=stream)
+    fake.api = lambda r: httpx.Response(200, headers=SSE_TYPE, stream=stream)
     with running(directory, fake) as (client, *_):
         response = client.post("/v1/chat/completions", json={**BODY, "stream": streaming})
         if streaming:
@@ -127,7 +127,7 @@ def test_incomplete_and_refusal(directory, fake, reason, finish, streaming):
 @pytest.mark.parametrize("streaming", [False, True])
 def test_stream_failures_never_report_success(directory, fake, bad, streaming):
     stream = Chunks(bad)
-    fake.api = lambda r: httpx.Response(200, headers={"x-request-id": "req-failed"}, stream=stream)
+    fake.api = lambda r: httpx.Response(200, headers={**SSE_TYPE, "x-request-id": "req-failed"}, stream=stream)
     with running(directory, fake) as (client, fake, app):
         response = client.post("/v1/chat/completions", json={**BODY, "stream": streaming})
         assert response.headers["x-request-id"] == "req-failed"
@@ -219,7 +219,7 @@ def test_multiline_sse_comments_crlf_and_bom(directory, fake):
     split = event.index('"response":')
     raw = ("﻿: ping\r\nevent: response.completed\r\ndata: " + event[:split] + "\r\ndata: " + event[split:]
            + "\r\n\r\n").encode()
-    fake.api = lambda r: httpx.Response(200, stream=Chunks(raw, size=1))
+    fake.api = lambda r: httpx.Response(200, headers=SSE_TYPE, stream=Chunks(raw, size=1))
     with running(directory, fake) as (client, *_):
         response = client.post("/v1/chat/completions", json=BODY)
         assert response.status_code == 200
@@ -394,18 +394,16 @@ def test_other_503_is_not_retried(directory, fake):
         assert len(fake.calls) == 1
 
 
-@pytest.mark.parametrize("error,status,attempts", [(httpx.ConnectError("secret network detail"), 502, 3),
-                                                   (httpx.ReadTimeout("secret timeout detail"), 504, 1)])
-def test_network_errors_are_sanitized(directory, fake, monkeypatch, error, status, attempts):
-    monkeypatch.setattr("siwc_proxy.server.backoff", lambda attempt: 0)
-
+@pytest.mark.parametrize("error,status", [(httpx.ConnectError("secret network detail"), 502),
+                                          (httpx.ReadTimeout("secret timeout detail"), 504)])
+def test_network_errors_are_sanitized(directory, fake, error, status):
     def fail(request):
         raise error
     fake.api = fail
     with running(directory, fake) as (client, fake, _):
         response = client.post("/v1/chat/completions", json=BODY)
         assert response.status_code == status and "secret" not in response.text
-        assert len(fake.calls) == attempts  # only connection failures are retried
+        assert len(fake.calls) == 1  # connection failures are retried by the real transport, not here
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -416,7 +414,7 @@ def test_network_error_after_stream_start(directory, fake, streaming):
             raise httpx.ReadTimeout("private provider detail")
 
     broken = Broken(b"")
-    fake.api = lambda r: httpx.Response(200, stream=broken)
+    fake.api = lambda r: httpx.Response(200, headers=SSE_TYPE, stream=broken)
     with running(directory, fake) as (client, *_):
         response = client.post("/v1/chat/completions", json={**BODY, "stream": streaming})
         if streaming:
