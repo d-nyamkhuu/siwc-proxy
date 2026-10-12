@@ -1,0 +1,41 @@
+[project]
+name = "siwc-proxy"
+version = "0.2.0"
+description = "Local OpenAI-compatible API proxy for Sign in with ChatGPT token sharing"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "anyio>=4.4",
+    "authlib>=1.7.2,<1.8",
+    "click>=8.1",
+    "fastapi>=0.115",
+    "filelock>=3.16",
+    "httpx>=0.28,<0.29",
+    "itsdangerous>=2.2",
+    "joserfc>=1.6",
+    "platformdirs>=4.3",
+    "pydantic-settings>=2.7",
+    "uvicorn>=0.30",
+]
+
+[project.scripts]
+siwc-proxy = "siwc_proxy.cli:main"
+
+[dependency-groups]
+dev = [
+    "openai>=2.54,<3",
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["siwc_proxy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`:UserWarning"]
