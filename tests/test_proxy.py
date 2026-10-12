@@ -470,7 +470,7 @@ def test_unknown_routes_are_openai_shaped(directory, fake):
 
 # Models
 
-def test_models_catalog_cache_and_retrieve(directory, fake):
+def test_models_catalog_and_retrieve(directory, fake):
     fake.api = lambda r: httpx.Response(200, json={"models": [
         {"slug": "test-model", "display_name": "Test", "visibility": "list"},
         {"slug": "hidden", "visibility": "hidden"}]})
@@ -481,19 +481,14 @@ def test_models_catalog_cache_and_retrieve(directory, fake):
         assert client.get("/v1/models/test-model").json()["display_name"] == "Test"
         missing = client.get("/v1/models/hidden")
         assert missing.status_code == 404 and missing.json()["error"]["code"] == "model_not_found"
-        assert len(fake.calls) == 1
+        assert len(fake.calls) == 3  # not cached
 
 
-def test_models_query_is_forwarded_but_not_cached(directory, fake):
+def test_models_query_is_forwarded(directory, fake):
     fake.api = lambda r: httpx.Response(200, json={"models": [{"slug": "m", "visibility": "list"}]})
-    with running(directory, fake) as (client, fake, app):
-        for n in range(3):
-            assert client.get(f"/v1/models?client_version={n}").status_code == 200
-        assert [c.url.query for c in fake.calls] == [b"client_version=0", b"client_version=1", b"client_version=2"]
-        assert not app.state.models
-        client.get("/v1/models")
-        client.get("/v1/models")
-        assert len(fake.calls) == 4 and list(app.state.models) == ["catalog"]
+    with running(directory, fake) as (client, fake, _):
+        assert client.get("/v1/models?client_version=1&x=a%20b").status_code == 200
+        assert fake.calls[-1].url.query == b"client_version=1&x=a%20b"
 
 
 

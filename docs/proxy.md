@@ -107,8 +107,9 @@ Open them in a browser on the same machine, because the callback must reach `127
 | anything else | key | OpenAI-shaped `404 unknown_url` |
 
 The proxy forwards the request headers `OpenAI-Beta`, `Idempotency-Key`, and
-`X-Client-Request-Id`. Only `GET /v1/models` forwards its query string; the
-catalog is cached for five minutes only when there is no query.
+`X-Client-Request-Id`. Only `GET /v1/models` forwards its query string. The
+model catalog is not cached: each models request, including a single-model
+lookup, fetches the full list from OpenAI.
 Organization and project headers are not forwarded.
 
 Back to the client, the proxy relays only these upstream headers: the request

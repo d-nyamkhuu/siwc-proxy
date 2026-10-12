@@ -38,7 +38,6 @@ MODEL_FIELDS = ("display_name", "description", "context_window", "max_context_wi
                 "default_reasoning_level", "supported_reasoning_levels", "supports_parallel_tool_calls",
                 "support_verbosity", "supports_search_tool")
 MAX_RETRIES = 2
-MODELS_TTL = 300
 
 
 def is_public(path):
@@ -190,7 +189,6 @@ def create_app(settings=None, *, transport=None, api_key=None):
     @asynccontextmanager
     async def lifespan(app):
         app.state.active = set()
-        app.state.models = {}
         auth.serving, auth.signed_in = True, anyio.Event()
         timeout = httpx.Timeout(30, read=settings.read_timeout)
         async with httpx.AsyncClient(transport=transport, trust_env=False, follow_redirects=False,
@@ -333,7 +331,6 @@ def create_app(settings=None, *, transport=None, api_key=None):
     @app.post("/auth/logout")
     async def logout(forget: bool = False):
         revoked = await auth.logout(forget=forget)
-        app.state.models.clear()
         return {"state": "signed_out" if forget else auth.status()["state"], "revoked": revoked}
 
     @app.get("/auth/start/{launch}")
@@ -354,7 +351,6 @@ def create_app(settings=None, *, transport=None, api_key=None):
             record = await auth.complete_sign_in(request)
         except SignInError as error:
             return page(str(error), 400)
-        app.state.models.clear()
         who = record.account.email or "your ChatGPT account"
         if record.state == "consent_required":
             return page(f"Signed in as {who}, but ChatGPT plan usage was not allowed. "
@@ -365,11 +361,7 @@ def create_app(settings=None, *, transport=None, api_key=None):
     # OpenAI API
 
     async def catalog(request):
-        query = request.scope["query_string"]
-        cached = app.state.models.get("catalog")
-        if not query and cached and cached[0] > time.monotonic():
-            return cached[1], cached[2]
-        response = await send(request, "GET", "/models", query=query)
+        response = await send(request, "GET", "/models", query=request.scope["query_string"])
         if not response.is_success:
             raise Relayed(await upstream_error(response))
         try:
@@ -389,10 +381,7 @@ def create_app(settings=None, *, transport=None, api_key=None):
             raise protocol_error("OpenAI returned an invalid model catalog.") from None
         finally:
             await close(response)
-        headers = response_headers(response, translated=True)
-        if not query:  # Only the plain catalog is cached, so arbitrary queries cannot grow memory.
-            app.state.models["catalog"] = (time.monotonic() + MODELS_TTL, payload, headers)
-        return payload, headers
+        return payload, response_headers(response, translated=True)
 
     @app.get("/v1/models")
     async def models(request: Request):
