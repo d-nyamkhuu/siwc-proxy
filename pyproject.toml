@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "anyio>=4.4",
-    "authlib>=1.7.2,<1.8",
+    "authlib>=1.7.2,<1.9",
     "click>=8.1",
     "fastapi>=0.115",
     "filelock>=3.16",
@@ -48,7 +48,7 @@ siwc-proxy = "siwc_proxy.cli:main"
 
 [dependency-groups]
 dev = [
-    "openai>=2.54,<3",
+    "openai>=2.54,<4",
     "pytest>=8",
 ]
 
