@@ -6,6 +6,22 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
+authors = [{ name = "Nyamkhuu Demberelsuren" }]
+keywords = ["openai", "chatgpt", "proxy", "oauth", "sign-in-with-chatgpt", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: Proxy Servers",
+    "Topic :: Software Development :: Libraries",
+]
 dependencies = [
     "anyio>=4.4",
     "authlib>=1.7.2,<1.8",
@@ -20,6 +36,12 @@ dependencies = [
     "pydantic-settings>=2.7",
     "uvicorn>=0.30",
 ]
+
+[project.urls]
+Homepage = "https://github.com/d-nyamkhuu/siwc-proxy"
+Documentation = "https://github.com/d-nyamkhuu/siwc-proxy/blob/main/docs/proxy.md"
+Source = "https://github.com/d-nyamkhuu/siwc-proxy"
+Issues = "https://github.com/d-nyamkhuu/siwc-proxy/issues"
 
 [project.scripts]
 siwc-proxy = "siwc_proxy.cli:main"
@@ -36,6 +58,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["siwc_proxy"]
+
+[tool.hatch.build.targets.sdist]
+include = ["siwc_proxy", "tests", "docs", "README.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
