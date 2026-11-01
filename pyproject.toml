@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "anyio>=4.4",
-    "authlib>=1.8,<1.9",
+    "authlib>=1.8,<1.10",
     "click>=8.1",
     "fastapi>=0.115",
     "filelock>=3.16",
